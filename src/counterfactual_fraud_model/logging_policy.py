@@ -16,7 +16,7 @@ class LoggingPolicyGenerator:
     def __init__(
         self,
         cutoff: float = 0.05,
-        exploration_rate: float = 0.5,
+        exploration_rate: float = 0.05,
         propensity_type: str = "uniform",
         random_state: Optional[int] = None
     ):

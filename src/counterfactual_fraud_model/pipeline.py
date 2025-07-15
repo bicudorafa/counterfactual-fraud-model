@@ -25,11 +25,10 @@ class OffPolicyEvaluationPipeline:
         sample_size: int = 10_000,
         # Logging policy parameters
         cutoff: float = 0.05,
-        exploration_rate: float = 0.5,
-        propensity_type: str = "linear",
+        exploration_rate: float = 0.05,
+        propensity_type: str = "uniform",
         # Counterfactual estimator parameters
-        n_bootstrap: int = 1000,
-        metrics: Optional[List[str]] = None,
+        n_bootstrap: int = 5000,
         random_state: Optional[int] = None
     ):
         """
@@ -45,7 +44,6 @@ class OffPolicyEvaluationPipeline:
             exploration_rate: Base exploration rate for blocked transactions
             propensity_type: Type of propensity function ("uniform" or "linear")
             n_bootstrap: Number of bootstrap repetitions
-            metrics: List of metric names to calculate
             random_state: Random seed for reproducibility
         """
         self.random_state = random_state
@@ -70,7 +68,6 @@ class OffPolicyEvaluationPipeline:
         # Store estimator parameters for later use
         self.estimator_params = {
             'n_bootstrap': n_bootstrap,
-            'metrics': metrics,
             'random_state': random_state
         }
         
@@ -85,7 +82,6 @@ class OffPolicyEvaluationPipeline:
             'exploration_rate': exploration_rate,
             'propensity_type': propensity_type,
             'n_bootstrap': n_bootstrap,
-            'metrics': metrics,
             'random_state': random_state
         }
     

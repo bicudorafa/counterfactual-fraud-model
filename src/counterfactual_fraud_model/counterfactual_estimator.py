@@ -17,7 +17,6 @@ class CounterfactualValuesEstimator:
         self,
         data: pd.DataFrame,
         n_bootstrap: int = 5000,
-        metrics: Optional[List[str]] = None,
         random_state: Optional[int] = None
     ):
         """
@@ -26,27 +25,22 @@ class CounterfactualValuesEstimator:
         Args:
             data: DataFrame with columns: is_fraud, model_scores, propensity_score, model_action, policy_action
             n_bootstrap: Number of bootstrap repetitions
-            metrics: List of metric names to calculate ('precision', 'recall', 'f1')
             random_state: Random seed for reproducibility
         """
         self.n_bootstrap = n_bootstrap
         self.random_state = random_state
         
-        if metrics is None:
-            metrics = ['precision', 'recall']
-        self.metrics = metrics
-        
-        # Available metrics
+        # Available metrics - calculate all by default
         self.available_metrics = {
             'precision': self._weighted_precision,
             'recall': self._weighted_recall,
-            'f1': self._weighted_f1
+            'f1': self._weighted_f1,
+            'approval_rate': self._weighted_approval_rate,
+            'fraud_rate': self._weighted_fraud_rate
         }
         
-        # Validate requested metrics
-        for metric in self.metrics:
-            if metric not in self.available_metrics:
-                raise ValueError(f"Unknown metric: {metric}. Available metrics: {list(self.available_metrics.keys())}")
+        # Always calculate all available metrics
+        self.metrics = list(self.available_metrics.keys())
         
         # Validate data has required columns
         required_columns = ['is_fraud', 'model_scores', 'propensity_score', 'model_action', 'policy_action']
@@ -71,27 +65,57 @@ class CounterfactualValuesEstimator:
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
     
-    def _weighted_precision(self, y_true: np.ndarray, y_pred: np.ndarray, 
-                           weights: np.ndarray) -> float:
-        """Calculate weighted precision."""
-        if len(y_pred) == 0 or np.sum(y_pred * weights) == 0:
-            return 0.0
+    def _compute_weighted_stats(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                               weights: np.ndarray) -> Dict[str, float]:
+        """
+        Compute basic weighted statistics used by multiple metrics.
+        
+        Args:
+            y_true: True labels (0/1)
+            y_pred: Predicted labels (0/1) 
+            weights: Sample weights
+            
+        Returns:
+            Dictionary with basic weighted statistics
+        """
+        total_weights = np.sum(weights)
+        if total_weights == 0:
+            return {
+                'total_weights': 0.0,
+                'true_positives': 0.0,
+                'predicted_positives': 0.0,
+                'actual_positives': 0.0,
+                'predicted_negatives': 0.0
+            }
         
         true_positives = np.sum(((y_true == 1) & (y_pred == 1)) * weights)
         predicted_positives = np.sum(y_pred * weights)
+        actual_positives = np.sum(y_true * weights)
+        predicted_negatives = total_weights - predicted_positives
         
-        return true_positives / predicted_positives
+        return {
+            'total_weights': total_weights,
+            'true_positives': true_positives,
+            'predicted_positives': predicted_positives,
+            'actual_positives': actual_positives,
+            'predicted_negatives': predicted_negatives
+        }
+    
+    def _weighted_precision(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                           weights: np.ndarray) -> float:
+        """Calculate weighted precision."""
+        stats = self._compute_weighted_stats(y_true, y_pred, weights)
+        if stats['predicted_positives'] == 0:
+            return 0.0
+        return stats['true_positives'] / stats['predicted_positives']
     
     def _weighted_recall(self, y_true: np.ndarray, y_pred: np.ndarray, 
                         weights: np.ndarray) -> float:
         """Calculate weighted recall."""
-        if len(y_true) == 0 or np.sum(y_true * weights) == 0:
+        stats = self._compute_weighted_stats(y_true, y_pred, weights)
+        if stats['actual_positives'] == 0:
             return 0.0
-        
-        true_positives = np.sum(((y_true == 1) & (y_pred == 1)) * weights)
-        actual_positives = np.sum(y_true * weights)
-        
-        return true_positives / actual_positives
+        return stats['true_positives'] / stats['actual_positives']
     
     def _weighted_f1(self, y_true: np.ndarray, y_pred: np.ndarray, 
                     weights: np.ndarray) -> float:
@@ -103,6 +127,33 @@ class CounterfactualValuesEstimator:
             return 0.0
         
         return 2 * (precision * recall) / (precision + recall)
+    
+    def _weighted_approval_rate(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                               weights: np.ndarray) -> float:
+        """
+        Calculate weighted approval rate.
+        
+        Approval rate is the proportion of transactions that are not predicted as fraud
+        (i.e., y_pred == 0). This represents the percentage of transactions that would
+        be allowed by the policy.
+        """
+        stats = self._compute_weighted_stats(y_true, y_pred, weights)
+        if stats['total_weights'] == 0:
+            return 0.0
+        return stats['predicted_negatives'] / stats['total_weights']
+    
+    def _weighted_fraud_rate(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                            weights: np.ndarray) -> float:
+        """
+        Calculate weighted fraud rate.
+        
+        Fraud rate is the proportion of transactions that are actually fraudulent
+        (i.e., y_true == 1). This represents the base rate of fraud in the data.
+        """
+        stats = self._compute_weighted_stats(y_true, y_pred, weights)
+        if stats['total_weights'] == 0:
+            return 0.0
+        return stats['actual_positives'] / stats['total_weights']
     
     def estimate_ope_metrics(self, y_pred: np.ndarray) -> Dict[str, Dict[str, float]]:
         """
@@ -207,6 +258,5 @@ class CounterfactualValuesEstimator:
         """Return the current parameters."""
         return {
             'n_bootstrap': self.n_bootstrap,
-            'metrics': self.metrics,
             'random_state': self.random_state
         } 

@@ -28,7 +28,6 @@ class OffPolicyEvaluationSimulator:
         propensity_type: str = "linear",
         # Counterfactual estimator parameters
         n_bootstrap: int = 1000,
-        metrics: Optional[List[str]] = None,
         random_state: Optional[int] = None
     ):
         """
@@ -43,7 +42,6 @@ class OffPolicyEvaluationSimulator:
             cutoff: Score threshold for blocking transactions
             propensity_type: Type of propensity function
             n_bootstrap: Number of bootstrap repetitions
-            metrics: List of metric names to calculate
             random_state: Random seed for reproducibility
         """
         self.base_params = {
@@ -55,14 +53,11 @@ class OffPolicyEvaluationSimulator:
             'cutoff': cutoff,
             'propensity_type': propensity_type,
             'n_bootstrap': n_bootstrap,
-            'metrics': metrics,
             'random_state': random_state
         }
         
-        if metrics is None:
-            self.metrics = ['precision', 'recall']
-        else:
-            self.metrics = metrics
+        # All metrics are now calculated by default
+        self.metrics = ['precision', 'recall', 'f1', 'approval_rate', 'fraud_rate']
     
     def simulate_exploration_rates(
         self, 

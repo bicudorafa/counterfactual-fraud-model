@@ -134,7 +134,7 @@ class TestCounterfactualValuesEstimator:
             random_state=42
         )
         assert estimator.n_bootstrap == 100
-        assert estimator.metrics == ['precision', 'recall']
+        assert estimator.metrics == ['precision', 'recall', 'f1', 'approval_rate', 'fraud_rate']
         assert len(estimator.observed_data) > 0
     
     def test_metric_estimation(self):
@@ -156,8 +156,11 @@ class TestCounterfactualValuesEstimator:
         # Check structure
         assert 'precision' in results
         assert 'recall' in results
+        assert 'f1' in results
+        assert 'approval_rate' in results
+        assert 'fraud_rate' in results
         
-        for metric_name in ['precision', 'recall']:
+        for metric_name in ['precision', 'recall', 'f1', 'approval_rate', 'fraud_rate']:
             metric_stats = results[metric_name]
             assert 'mean' in metric_stats
             assert 'p025' in metric_stats
@@ -189,8 +192,11 @@ class TestCounterfactualValuesEstimator:
         # Check structure
         assert 'precision' in results
         assert 'recall' in results
+        assert 'f1' in results
+        assert 'approval_rate' in results
+        assert 'fraud_rate' in results
         
-        for metric_name in ['precision', 'recall']:
+        for metric_name in ['precision', 'recall', 'f1', 'approval_rate', 'fraud_rate']:
             metric_stats = results[metric_name]
             assert 'mean' in metric_stats
             assert 'p025' in metric_stats
@@ -250,6 +256,9 @@ class TestOffPolicyEvaluationPipeline:
         metrics = results['metrics']
         assert 'precision' in metrics
         assert 'recall' in metrics
+        assert 'f1' in metrics
+        assert 'approval_rate' in metrics
+        assert 'fraud_rate' in metrics
 
 
 class TestOffPolicyEvaluationSimulator:
@@ -259,7 +268,7 @@ class TestOffPolicyEvaluationSimulator:
         """Test that simulator initializes correctly."""
         simulator = OffPolicyEvaluationSimulator(sample_size=100, random_state=42)
         assert simulator.base_params['sample_size'] == 100
-        assert simulator.metrics == ['precision', 'recall']
+        assert simulator.metrics == ['precision', 'recall', 'f1', 'approval_rate', 'fraud_rate']
     
     def test_exploration_rate_simulation(self):
         """Test simulation across multiple exploration rates."""
@@ -320,6 +329,10 @@ def test_integration():
     assert 'policy_action' in policy_data.columns
     assert 'model_action' in policy_data.columns
     assert 'precision' in metrics
+    assert 'recall' in metrics
+    assert 'f1' in metrics
+    assert 'approval_rate' in metrics
+    assert 'fraud_rate' in metrics
     assert 'data' in pipeline_results
     assert len(sim_results['metrics_by_rate']) == 2
 
