@@ -67,11 +67,12 @@ class OffPolicyEvaluationPipeline:
             random_state=random_state
         )
         
-        self.estimator = CounterfactualValuesEstimator(
-            n_bootstrap=n_bootstrap,
-            metrics=metrics,
-            random_state=random_state
-        )
+        # Store estimator parameters for later use
+        self.estimator_params = {
+            'n_bootstrap': n_bootstrap,
+            'metrics': metrics,
+            'random_state': random_state
+        }
         
         # Store parameters for easy access
         self.params = {
@@ -107,17 +108,20 @@ class OffPolicyEvaluationPipeline:
         # Step 2: Apply logging policy
         policy_data = self.logging_policy.generate_policy(data)
         
-        # Step 3: Estimate counterfactual metrics
-        metrics_results = self.estimator.estimate_metrics(
-            policy_data, policy_threshold
+        # Step 3: Create estimator with data and estimate counterfactual metrics
+        estimator = CounterfactualValuesEstimator(
+            data=policy_data,
+            **self.estimator_params
         )
+        
+        metrics_results = estimator.estimate_threshold_metrics(policy_threshold)
         
         # Calculate some basic statistics for reporting
         total_transactions = len(policy_data)
-        observed_transactions = (policy_data['action'] == 'allow').sum()
+        observed_transactions = (policy_data['policy_action'] == 'allow').sum()
         observation_rate = observed_transactions / total_transactions
         
-        fraud_rate_observed = policy_data[policy_data['action'] == 'allow']['is_fraud'].mean()
+        fraud_rate_observed = policy_data[policy_data['policy_action'] == 'allow']['is_fraud'].mean()
         fraud_rate_all = policy_data['is_fraud'].mean()
         
         results = {
@@ -153,11 +157,15 @@ class OffPolicyEvaluationPipeline:
         data = self.data_generator.generate_data()
         policy_data = self.logging_policy.generate_policy(data)
         
+        # Create estimator with data once
+        estimator = CounterfactualValuesEstimator(
+            data=policy_data,
+            **self.estimator_params
+        )
+        
         results = {}
         for threshold in thresholds:
-            metrics_results = self.estimator.estimate_metrics(
-                policy_data, threshold
-            )
+            metrics_results = estimator.estimate_threshold_metrics(threshold)
             
             results[threshold] = {
                 'metrics': metrics_results,
@@ -191,8 +199,8 @@ class OffPolicyEvaluationPipeline:
                 'max': data['propensity_score'].max(),
                 'std': data['propensity_score'].std()
             },
-            'observation_rate': (data['action'] == 'allow').mean(),
-            'block_rate': (data['action'] == 'block').mean()
+            'observation_rate': (data['policy_action'] == 'allow').mean(),
+            'block_rate': (data['policy_action'] == 'block').mean()
         }
         
         return summary

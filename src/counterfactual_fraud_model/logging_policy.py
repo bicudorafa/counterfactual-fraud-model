@@ -2,7 +2,7 @@
 
 import numpy as np
 import pandas as pd
-from typing import Optional, Protocol
+from typing import Optional
 
 
 class LoggingPolicyGenerator:
@@ -49,38 +49,47 @@ class LoggingPolicyGenerator:
             data: DataFrame from DataGenerator with model scores (modified in place)
             
         Returns:
-            DataFrame with added columns: propensity_score, action (same as input)
+            DataFrame with added columns: propensity_score, model_action, policy_action (same as input)
         """
         # Use model_scores as the main score for policy decisions
         scores = data['model_scores'].values
         n_transactions = len(scores)
         
         # Initialize arrays
-        actions = np.empty(n_transactions, dtype='<U5')  # 'allow' or 'block'
+        model_actions = np.empty(n_transactions, dtype='<U5')  # 'allow' or 'block'
+        policy_actions = np.empty(n_transactions, dtype='<U5')  # 'allow' or 'block'
         propensity_scores = np.zeros(n_transactions)
         
         # Process each transaction
         for i in range(n_transactions):
             score = scores[i]
             
+            # Model action is purely based on cutoff
+            if score <= self.cutoff:
+                model_actions[i] = 'allow'
+            else:
+                model_actions[i] = 'block'
+            
+            # Policy action includes exploration
             if score <= self.cutoff:
                 # Transactions below cutoff are always allowed
-                actions[i] = 'allow'
+                policy_actions[i] = 'allow'
                 propensity_scores[i] = 1.0
             else:
                 # Transactions above cutoff: sample based on exploration rate
                 if np.random.random() < self.exploration_rate:
                     # Selected for exploration - allow and set propensity score
-                    actions[i] = 'allow'
+                    policy_actions[i] = 'allow'
                     propensity_scores[i] = self.exploration_rate
                 else:
                     # Blocked - propensity score irrelevant (set to 0)
-                    actions[i] = 'block'
+                    policy_actions[i] = 'block'
                     propensity_scores[i] = 0.0
         
         # Add columns directly to the input DataFrame
         data['propensity_score'] = propensity_scores
-        data['action'] = actions
+        data['model_action'] = model_actions
+        data['policy_action'] = policy_actions
         
         return data
     

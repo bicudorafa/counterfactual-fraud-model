@@ -15,6 +15,7 @@ class CounterfactualValuesEstimator:
     
     def __init__(
         self,
+        data: pd.DataFrame,
         n_bootstrap: int = 5000,
         metrics: Optional[List[str]] = None,
         random_state: Optional[int] = None
@@ -23,6 +24,7 @@ class CounterfactualValuesEstimator:
         Initialize CounterfactualValuesEstimator.
         
         Args:
+            data: DataFrame with columns: is_fraud, model_scores, propensity_score, model_action, policy_action
             n_bootstrap: Number of bootstrap repetitions
             metrics: List of metric names to calculate ('precision', 'recall', 'f1')
             random_state: Random seed for reproducibility
@@ -46,8 +48,28 @@ class CounterfactualValuesEstimator:
             if metric not in self.available_metrics:
                 raise ValueError(f"Unknown metric: {metric}. Available metrics: {list(self.available_metrics.keys())}")
         
+        # Validate data has required columns
+        required_columns = ['is_fraud', 'model_scores', 'propensity_score', 'model_action', 'policy_action']
+        self._validate_data(data, required_columns)
+        
+        # Create observed_data as instance attribute
+        self.observed_data = data[data['policy_action'] == 'allow'].copy()
+        
+        if len(self.observed_data) == 0:
+            raise ValueError("No transactions with policy_action == 'allow' found. "
+                           "Counterfactual evaluation is impossible without observed (allowed) transactions.")
+        
+        # Calculate importance sampling weights
+        self.observed_data['weight'] = 1.0 / self.observed_data['propensity_score']
+        
         if random_state is not None:
             np.random.seed(random_state)
+    
+    def _validate_data(self, data: pd.DataFrame, required_columns: List[str]) -> None:
+        """Validate that data has all required columns."""
+        missing_columns = [col for col in required_columns if col not in data.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
     
     def _weighted_precision(self, y_true: np.ndarray, y_pred: np.ndarray, 
                            weights: np.ndarray) -> float:
@@ -82,44 +104,32 @@ class CounterfactualValuesEstimator:
         
         return 2 * (precision * recall) / (precision + recall)
     
-    def estimate_metrics(
-        self, 
-        data: pd.DataFrame, 
-        policy_threshold: float = 0.5
-    ) -> Dict[str, Dict[str, float]]:
+    def estimate_ope_metrics(self, y_pred: np.ndarray) -> Dict[str, Dict[str, float]]:
         """
-        Estimate counterfactual metrics with confidence intervals.
+        Estimate counterfactual metrics with confidence intervals using importance sampling.
         
-        This method evaluates how well a policy with the given threshold would perform
+        This method evaluates how well a policy with the given predictions would perform
         using counterfactual estimation. It applies importance sampling to estimate
         metrics for fraud detection policies under counterfactual assumptions.
         
         Args:
-            data: DataFrame from LoggingPolicyGenerator containing observed transactions
-            policy_threshold: Score threshold for converting model scores to binary predictions
+            y_pred: Binary prediction array (0/1) of the same size as observed_data.is_fraud
             
         Returns:
             Dictionary with metrics and their statistics (mean, p025, p975, std, n_bootstrap)
         """
-        # Filter to only observed transactions (those that were allowed)
-        observed_data = data[data['action'] == 'allow'].copy()
+        if len(y_pred) != len(self.observed_data):
+            raise ValueError(f"y_pred length ({len(y_pred)}) must match observed_data length ({len(self.observed_data)})")
         
-        if len(observed_data) == 0:
-            raise ValueError("No observed transactions available for estimation")
-        
-        # Calculate importance sampling weights
-        observed_data['weight'] = 1.0 / observed_data['propensity_score']
+        if not np.all(np.isin(y_pred, [0, 1])):
+            raise ValueError("y_pred must contain only 0s and 1s")
         
         # Get relevant columns
-        y_true = observed_data['is_fraud'].values
-        scores = observed_data['model_scores'].values
-        weights = observed_data['weight'].values
-        
-        # Convert scores to binary predictions based on threshold
-        y_pred = (scores > policy_threshold).astype(int)
+        y_true = self.observed_data['is_fraud'].values
+        weights = self.observed_data['weight'].values
         
         # Bootstrap estimation
-        n_samples = len(observed_data)
+        n_samples = len(self.observed_data)
         metric_results = {metric: [] for metric in self.metrics}
         
         for _ in range(self.n_bootstrap):
@@ -161,7 +171,38 @@ class CounterfactualValuesEstimator:
         
         return results
     
-
+    def estimate_policy_metrics(self) -> Dict[str, Dict[str, float]]:
+        """
+        Estimate metrics for the original model policy (model_action).
+        
+        Evaluates how well the original model policy would perform by converting
+        model_action to binary predictions (allow=1, block=0).
+        
+        Returns:
+            Dictionary with metrics and their statistics (mean, p025, p975, std, n_bootstrap)
+        """
+        if 'model_action' not in self.observed_data.columns:
+            raise ValueError("model_action column not found in data. Required for policy metrics evaluation.")
+        
+        y_pred = (self.observed_data['model_action'] == 'allow').astype(int)
+        return self.estimate_ope_metrics(y_pred)
+    
+    def estimate_threshold_metrics(self, threshold: float) -> Dict[str, Dict[str, float]]:
+        """
+        Estimate metrics for a threshold-based policy.
+        
+        Evaluates how well a policy with the given threshold would perform
+        by converting model scores to binary predictions based on the threshold.
+        
+        Args:
+            threshold: Score threshold for converting model scores to binary predictions
+            
+        Returns:
+            Dictionary with metrics and their statistics (mean, p025, p975, std, n_bootstrap)
+        """
+        y_pred = (self.observed_data['model_scores'] > threshold).astype(int)
+        return self.estimate_ope_metrics(y_pred)
+    
     def get_params(self) -> dict:
         """Return the current parameters."""
         return {

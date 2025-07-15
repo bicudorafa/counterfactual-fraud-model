@@ -65,12 +65,13 @@ class TestLoggingPolicyGenerator:
         policy_data = policy.generate_policy(data)
         
         # Check structure
-        expected_columns = ['model_scores', 'is_fraud', 'propensity_score', 'action']
+        expected_columns = ['model_scores', 'is_fraud', 'propensity_score', 'model_action', 'policy_action']
         assert list(policy_data.columns) == expected_columns
         assert len(policy_data) == 100
         
         # Check data types and values
-        assert policy_data['action'].isin(['allow', 'block']).all()
+        assert policy_data['policy_action'].isin(['allow', 'block']).all()
+        assert policy_data['model_action'].isin(['allow', 'block']).all()
         assert policy_data['propensity_score'].between(0, 1).all()
     
     def test_below_cutoff_always_allowed(self):
@@ -85,7 +86,8 @@ class TestLoggingPolicyGenerator:
         result = policy.generate_policy(data)
         
         # All should be allowed with propensity score 1.0
-        assert (result['action'] == 'allow').all()
+        assert (result['policy_action'] == 'allow').all()
+        assert (result['model_action'] == 'allow').all()
         assert (result['propensity_score'] == 1.0).all()
     
     def test_above_cutoff_exploration(self):
@@ -100,11 +102,14 @@ class TestLoggingPolicyGenerator:
         result = policy.generate_policy(data)
         
         # Check that some are allowed and some are blocked
-        allowed = result['action'] == 'allow'
-        blocked = result['action'] == 'block'
+        allowed = result['policy_action'] == 'allow'
+        blocked = result['policy_action'] == 'block'
         
         assert allowed.sum() > 0  # Some should be allowed
         assert blocked.sum() > 0  # Some should be blocked
+        
+        # Check that model would block all transactions above cutoff
+        assert (result['model_action'] == 'block').all()
         
         # Check propensity scores
         assert (result.loc[allowed, 'propensity_score'] == 0.5).all()
@@ -116,9 +121,21 @@ class TestCounterfactualValuesEstimator:
     
     def test_estimator_initialization(self):
         """Test that CounterfactualValuesEstimator initializes correctly."""
-        estimator = CounterfactualValuesEstimator(n_bootstrap=100, random_state=42)
+        # Create sample data first
+        generator = DataGenerator(sample_size=100, random_state=42)
+        data = generator.generate_data()
+        
+        policy = LoggingPolicyGenerator(exploration_rate=0.8, random_state=42)
+        policy_data = policy.generate_policy(data)
+        
+        estimator = CounterfactualValuesEstimator(
+            data=policy_data,
+            n_bootstrap=100,
+            random_state=42
+        )
         assert estimator.n_bootstrap == 100
         assert estimator.metrics == ['precision', 'recall']
+        assert len(estimator.observed_data) > 0
     
     def test_metric_estimation(self):
         """Test that metric estimation works with simple data."""
@@ -129,8 +146,12 @@ class TestCounterfactualValuesEstimator:
         policy = LoggingPolicyGenerator(exploration_rate=0.8, random_state=42)
         policy_data = policy.generate_policy(data)
         
-        estimator = CounterfactualValuesEstimator(n_bootstrap=50, random_state=42)
-        results = estimator.estimate_metrics(policy_data, policy_threshold=0.5)
+        estimator = CounterfactualValuesEstimator(
+            data=policy_data,
+            n_bootstrap=50,
+            random_state=42
+        )
+        results = estimator.estimate_threshold_metrics(threshold=0.5)
         
         # Check structure
         assert 'precision' in results
@@ -148,6 +169,48 @@ class TestCounterfactualValuesEstimator:
             assert 0 <= metric_stats['mean'] <= 1
             assert 0 <= metric_stats['p025'] <= 1
             assert 0 <= metric_stats['p975'] <= 1
+    
+    def test_policy_metrics_estimation(self):
+        """Test that policy metrics estimation works."""
+        # Create simple test data
+        generator = DataGenerator(sample_size=200, random_state=42)
+        data = generator.generate_data()
+        
+        policy = LoggingPolicyGenerator(exploration_rate=0.8, random_state=42)
+        policy_data = policy.generate_policy(data)
+        
+        estimator = CounterfactualValuesEstimator(
+            data=policy_data,
+            n_bootstrap=50,
+            random_state=42
+        )
+        results = estimator.estimate_policy_metrics()
+        
+        # Check structure
+        assert 'precision' in results
+        assert 'recall' in results
+        
+        for metric_name in ['precision', 'recall']:
+            metric_stats = results[metric_name]
+            assert 'mean' in metric_stats
+            assert 'p025' in metric_stats
+            assert 'p975' in metric_stats
+            assert 'std' in metric_stats
+            assert 'n_bootstrap' in metric_stats
+    
+    def test_estimator_with_no_observed_data(self):
+        """Test that estimator raises error when no observed data exists."""
+        # Create data where all transactions are blocked
+        data = pd.DataFrame({
+            'model_scores': [0.1, 0.2, 0.3, 0.4],
+            'is_fraud': [0, 1, 0, 1],
+            'propensity_score': [0.0, 0.0, 0.0, 0.0],
+            'model_action': ['block', 'block', 'block', 'block'],
+            'policy_action': ['block', 'block', 'block', 'block']
+        })
+        
+        with pytest.raises(ValueError, match="No transactions with policy_action == 'allow' found"):
+            CounterfactualValuesEstimator(data=data, n_bootstrap=50, random_state=42)
 
 
 class TestOffPolicyEvaluationPipeline:
@@ -180,7 +243,8 @@ class TestOffPolicyEvaluationPipeline:
         assert len(data) == 200
         assert 'model_scores' in data.columns
         assert 'is_fraud' in data.columns
-        assert 'action' in data.columns
+        assert 'policy_action' in data.columns
+        assert 'model_action' in data.columns
         
         # Check metrics
         metrics = results['metrics']
@@ -236,8 +300,12 @@ def test_integration():
     policy_data = policy.generate_policy(data)
     
     # Estimate metrics
-    estimator = CounterfactualValuesEstimator(n_bootstrap=50, random_state=42)
-    metrics = estimator.estimate_metrics(policy_data)
+    estimator = CounterfactualValuesEstimator(
+        data=policy_data,
+        n_bootstrap=50,
+        random_state=42
+    )
+    metrics = estimator.estimate_threshold_metrics(threshold=0.05)
     
     # Run full pipeline
     pipeline = OffPolicyEvaluationPipeline(sample_size=300, n_bootstrap=20, random_state=42)
@@ -249,7 +317,8 @@ def test_integration():
     
     # Basic checks that everything executed without errors
     assert len(data) == 500
-    assert 'action' in policy_data.columns
+    assert 'policy_action' in policy_data.columns
+    assert 'model_action' in policy_data.columns
     assert 'precision' in metrics
     assert 'data' in pipeline_results
     assert len(sim_results['metrics_by_rate']) == 2
