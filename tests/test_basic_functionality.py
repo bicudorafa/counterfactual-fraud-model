@@ -130,7 +130,7 @@ class TestCounterfactualValuesEstimator:
         policy_data = policy.generate_policy(data)
         
         estimator = CounterfactualValuesEstimator(n_bootstrap=50, random_state=42)
-        results = estimator.estimate_policy_metrics(policy_data, policy_threshold=0.5)
+        results = estimator.estimate_metrics(policy_data, policy_threshold=0.5)
         
         # Check structure
         assert 'precision' in results
@@ -237,7 +237,7 @@ def test_integration():
     
     # Estimate metrics
     estimator = CounterfactualValuesEstimator(n_bootstrap=50, random_state=42)
-    metrics = estimator.estimate_policy_metrics(policy_data)
+    metrics = estimator.estimate_metrics(policy_data)
     
     # Run full pipeline
     pipeline = OffPolicyEvaluationPipeline(sample_size=300, n_bootstrap=20, random_state=42)

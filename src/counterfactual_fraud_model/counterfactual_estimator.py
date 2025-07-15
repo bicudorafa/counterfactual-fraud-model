@@ -15,7 +15,7 @@ class CounterfactualValuesEstimator:
     
     def __init__(
         self,
-        n_bootstrap: int = 1000,
+        n_bootstrap: int = 5000,
         metrics: Optional[List[str]] = None,
         random_state: Optional[int] = None
     ):
@@ -90,12 +90,16 @@ class CounterfactualValuesEstimator:
         """
         Estimate counterfactual metrics with confidence intervals.
         
+        This method evaluates how well a policy with the given threshold would perform
+        using counterfactual estimation. It applies importance sampling to estimate
+        metrics for fraud detection policies under counterfactual assumptions.
+        
         Args:
-            data: DataFrame from LoggingPolicyGenerator
-            policy_threshold: Threshold for converting scores to binary predictions
+            data: DataFrame from LoggingPolicyGenerator containing observed transactions
+            policy_threshold: Score threshold for converting model scores to binary predictions
             
         Returns:
-            Dictionary with metrics and their statistics (mean, p025, p975)
+            Dictionary with metrics and their statistics (mean, p025, p975, std, n_bootstrap)
         """
         # Filter to only observed transactions (those that were allowed)
         observed_data = data[data['action'] == 'allow'].copy()
@@ -157,78 +161,7 @@ class CounterfactualValuesEstimator:
         
         return results
     
-    def estimate_policy_metrics(
-        self,
-        data: pd.DataFrame,
-        policy_threshold: float = 0.5
-    ) -> Dict[str, Dict[str, float]]:
-        """
-        Estimate metrics for a specific policy threshold.
-        
-        This method evaluates how well the original policy (based on cutoff)
-        would perform using counterfactual estimation.
-        
-        Args:
-            data: DataFrame from LoggingPolicyGenerator
-            policy_threshold: Score threshold for the policy to evaluate
-            
-        Returns:
-            Dictionary with policy metrics and confidence intervals
-        """
-        # Filter to only observed transactions
-        observed_data = data[data['action'] == 'allow'].copy()
-        
-        if len(observed_data) == 0:
-            raise ValueError("No observed transactions available for estimation")
-        
-        # Calculate weights
-        observed_data['weight'] = 1.0 / observed_data['propensity_score']
-        
-        # Create binary predictions based on policy threshold
-        y_true = observed_data['is_fraud'].values
-        y_pred = (observed_data['model_scores'] > policy_threshold).astype(int)
-        weights = observed_data['weight'].values
-        
-        # Bootstrap estimation
-        n_samples = len(observed_data)
-        metric_results = {metric: [] for metric in self.metrics}
-        
-        for _ in range(self.n_bootstrap):
-            # Poisson bootstrap
-            poisson_weights = np.random.poisson(1, n_samples)
-            bootstrap_weights = weights * poisson_weights
-            
-            if np.sum(bootstrap_weights) == 0:
-                continue
-            
-            # Calculate metrics
-            for metric_name in self.metrics:
-                metric_func = self.available_metrics[metric_name]
-                metric_value = metric_func(y_true, y_pred, bootstrap_weights)
-                metric_results[metric_name].append(metric_value)
-        
-        # Calculate statistics
-        results = {}
-        for metric_name, values in metric_results.items():
-            if len(values) > 0:
-                results[metric_name] = {
-                    'mean': np.mean(values),
-                    'p025': np.percentile(values, 2.5),
-                    'p975': np.percentile(values, 97.5),
-                    'std': np.std(values),
-                    'n_bootstrap': len(values)
-                }
-            else:
-                results[metric_name] = {
-                    'mean': 0.0,
-                    'p025': 0.0,
-                    'p975': 0.0,
-                    'std': 0.0,
-                    'n_bootstrap': 0
-                }
-        
-        return results
-    
+
     def get_params(self) -> dict:
         """Return the current parameters."""
         return {

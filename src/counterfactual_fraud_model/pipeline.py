@@ -108,7 +108,7 @@ class OffPolicyEvaluationPipeline:
         policy_data = self.logging_policy.generate_policy(data)
         
         # Step 3: Estimate counterfactual metrics
-        metrics_results = self.estimator.estimate_policy_metrics(
+        metrics_results = self.estimator.estimate_metrics(
             policy_data, policy_threshold
         )
         
@@ -155,7 +155,7 @@ class OffPolicyEvaluationPipeline:
         
         results = {}
         for threshold in thresholds:
-            metrics_results = self.estimator.estimate_policy_metrics(
+            metrics_results = self.estimator.estimate_metrics(
                 policy_data, threshold
             )
             

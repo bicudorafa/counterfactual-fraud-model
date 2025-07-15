@@ -24,7 +24,7 @@ alwaysApply: false
 - Maximum line length is 88 characters (Black default)
 
 # Project Structure
-- Use src/ directory for source code
+- After initiating UV's pyproject.toml, use the package name as the directory name for source code
 - Use tests/ directory for test files
 - Follow Python package structure
 - Use __init__.py files appropriately
