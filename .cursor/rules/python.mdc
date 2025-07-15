@@ -1,0 +1,71 @@
+---
+description:  Set of practices to use when working on Python based projects
+globs: 
+alwaysApply: false
+---
+# Python Rules
+
+# Build System
+- Use UV for dependency and virtual environments management
+- Use pyproject.toml for project configuration
+- Use Makefile for common tasks
+
+# Testing Framework
+- Use pytest for testing
+- Use pytest-cov for coverage
+- Use pytest-mock for mocking
+- Maintain minimum 80% test coverage
+
+# Code Style & Formatting
+- Follow PEP 8 style guide
+- Use Black for formatting
+- Use isort for import sorting
+- Use flake8 for linting
+- Maximum line length is 88 characters (Black default)
+
+# Project Structure
+- Use src/ directory for source code
+- Use tests/ directory for test files
+- Follow Python package structure
+- Use __init__.py files appropriately
+
+# Dependencies & Libraries
+- Use FastAPI for web applications
+- Use SQLAlchemy for database access
+- Use logging for proper logging
+- Use python-dotenv for environment variables
+- Use pydantic for data validation
+
+# Security
+- Never commit .env files
+- Use proper input validation
+- Follow OWASP security guidelines
+- Use proper encryption
+- Implement proper authentication
+
+# Documentation
+- Use Google style docstrings
+- Keep README.md up to date
+- Use Sphinx for documentation
+- Include type hints
+- Document all public APIs
+
+# Performance
+- Use proper async/await patterns
+- Implement caching where appropriate
+- Use proper error handling
+- Follow Python performance best practices
+
+# Version Control
+- Use semantic versioning
+- Write meaningful commit messages
+- Use conventional commits
+- Review code before merging
+
+# Code Quality
+- Run linting before commits
+- Use mypy for type checking
+- Regular code reviews required
+- Use proper logging levels
+- Implement proper error tracking
+- Use pre-commit hooks 
