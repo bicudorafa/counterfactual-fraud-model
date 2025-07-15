@@ -1,7 +1,7 @@
 """Off Policy Evaluation Pipeline for Counterfactual Fraud Model Simulation."""
 
 import pandas as pd
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from .data_generator import DataGenerator
 from .logging_policy import LoggingPolicyGenerator
 from .counterfactual_estimator import CounterfactualValuesEstimator
@@ -23,194 +23,226 @@ class OffPolicyEvaluationPipeline:
         mean: float = 0.0,
         sd: float = 0.1,
         sample_size: int = 10_000,
-        # Logging policy parameters
-        cutoff: float = 0.05,
-        exploration_rate: float = 0.05,
-        propensity_type: str = "uniform",
         # Counterfactual estimator parameters
         n_bootstrap: int = 5000,
-        random_state: Optional[int] = None
+        random_state: Optional[int] = None,
     ):
         """
         Initialize OffPolicyEvaluationPipeline.
         
         Args:
-            alpha: Alpha parameter for beta distribution
-            beta_param: Beta parameter for beta distribution
-            mean: Mean for normal error distribution
-            sd: Standard deviation for normal error distribution
+            alpha: Alpha parameter for beta distribution in data generation
+            beta_param: Beta parameter for beta distribution in data generation
+            mean: Mean for normal error distribution in data generation
+            sd: Standard deviation for normal error distribution in data generation
             sample_size: Number of samples to generate
-            cutoff: Score threshold for blocking transactions
-            exploration_rate: Base exploration rate for blocked transactions
-            propensity_type: Type of propensity function ("uniform" or "linear")
-            n_bootstrap: Number of bootstrap repetitions
-            random_state: Random seed for reproducibility
+            n_bootstrap: Number of bootstrap repetitions for counterfactual estimation
+            random_state: Random seed for reproducibility across all components
         """
-        self.random_state = random_state
-        
-        # Initialize components
-        self.data_generator = DataGenerator(
-            alpha=alpha,
-            beta_param=beta_param,
-            mean=mean,
-            sd=sd,
-            sample_size=sample_size,
-            random_state=random_state
+        # Validate inputs
+        self._validate_initialization_params(
+            alpha, beta_param, mean, sd, sample_size, n_bootstrap
         )
         
-        self.logging_policy = LoggingPolicyGenerator(
-            cutoff=cutoff,
-            exploration_rate=exploration_rate,
-            propensity_type=propensity_type,
-            random_state=random_state
-        )
+        # Store parameters for component initialization
+        self._alpha = alpha
+        self._beta_param = beta_param
+        self._mean = mean
+        self._sd = sd
+        self._sample_size = sample_size
+        self._n_bootstrap = n_bootstrap
+        self._random_state = random_state
         
-        # Store estimator parameters for later use
-        self.estimator_params = {
-            'n_bootstrap': n_bootstrap,
-            'random_state': random_state
-        }
+        # Initialize data generator (but don't generate data yet - lazy initialization)
+        self._data_generator = None
+        self._generated_data = None
         
-        # Store parameters for easy access
-        self.params = {
-            'alpha': alpha,
-            'beta_param': beta_param,
-            'mean': mean,
-            'sd': sd,
-            'sample_size': sample_size,
-            'cutoff': cutoff,
-            'exploration_rate': exploration_rate,
-            'propensity_type': propensity_type,
-            'n_bootstrap': n_bootstrap,
-            'random_state': random_state
+    @property
+    def params(self) -> Dict[str, Any]:
+        """Return the current parameters."""
+        return {
+            'alpha': self._alpha,
+            'beta_param': self._beta_param,
+            'mean': self._mean,
+            'sd': self._sd,
+            'sample_size': self._sample_size,
+            'n_bootstrap': self._n_bootstrap,
+            'random_state': self._random_state
         }
     
-    def run_pipeline(self, policy_threshold: Optional[float] = None) -> Dict[str, Any]:
+    def _validate_initialization_params(
+        self, 
+        alpha: float, 
+        beta_param: float, 
+        mean: float, 
+        sd: float, 
+        sample_size: int, 
+        n_bootstrap: int
+    ) -> None:
+        """Validate initialization parameters."""
+        if alpha <= 0:
+            raise ValueError("alpha must be positive")
+        if beta_param <= 0:
+            raise ValueError("beta_param must be positive")
+        if sd <= 0:
+            raise ValueError("sd must be positive")
+        if sample_size <= 0:
+            raise ValueError("sample_size must be positive")
+        if n_bootstrap <= 0:
+            raise ValueError("n_bootstrap must be positive")
+    
+    def _validate_pipeline_params(self, cutoff: float, exploration_rate: float) -> None:
+        """Validate pipeline execution parameters."""
+        if not 0 <= cutoff <= 1:
+            raise ValueError("cutoff must be between 0 and 1")
+        if not 0 <= exploration_rate <= 1:
+            raise ValueError("exploration_rate must be between 0 and 1")
+    
+    @property
+    def generated_data(self) -> pd.DataFrame:
+        """
+        Lazy property to get generated data.
+        
+        Returns:
+            Generated synthetic fraud data
+        """
+        if self._generated_data is None:
+            self._ensure_data_generator()
+            self._generated_data = self._data_generator.generate_data()
+        return self._generated_data.copy()
+    
+    def _ensure_data_generator(self) -> None:
+        """Ensure data generator is initialized."""
+        if self._data_generator is None:
+            self._data_generator = DataGenerator(
+                alpha=self._alpha,
+                beta_param=self._beta_param,
+                mean=self._mean,
+                sd=self._sd,
+                sample_size=self._sample_size,
+                random_state=self._random_state
+            )
+    
+    def _create_logging_policy_generator(
+        self, 
+        cutoff: float, 
+        exploration_rate: float
+    ) -> LoggingPolicyGenerator:
+        """Create and return a logging policy generator with specified parameters."""
+        return LoggingPolicyGenerator(
+            cutoff=cutoff,
+            exploration_rate=exploration_rate,
+            random_state=self._random_state
+        )
+    
+    def _create_counterfactual_estimator(self, policy_data: pd.DataFrame) -> CounterfactualValuesEstimator:
+        """Create and return a counterfactual estimator with policy data."""
+        return CounterfactualValuesEstimator(
+            data=policy_data,
+            n_bootstrap=self._n_bootstrap,
+            random_state=self._random_state,
+        )
+    
+    def _calculate_summary_statistics(self, policy_data: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Calculate comprehensive summary statistics for the pipeline data.
+        
+        Args:
+            policy_data: DataFrame with policy actions and model predictions
+            
+        Returns:
+            Dictionary containing various statistical summaries
+        """
+        total_transactions = len(policy_data)
+        
+        # Original model performance
+        original_approval_rate = (policy_data['model_action'] == 'allow').mean()
+        original_allowed_data = policy_data[policy_data['model_action'] == 'allow']
+        original_fraud_rate = original_allowed_data['is_fraud'].mean() if len(original_allowed_data) > 0 else 0.0
+        
+        # Policy performance
+        policy_approval_rate = (policy_data['policy_action'] == 'allow').mean()
+        policy_allowed_data = policy_data[policy_data['policy_action'] == 'allow']
+        policy_fraud_rate = policy_allowed_data['is_fraud'].mean() if len(policy_allowed_data) > 0 else 0.0
+        
+        # Overall statistics
+        true_fraud_rate = policy_data['is_fraud'].mean()
+        
+        # Comparative metrics
+        approval_rate_increase = policy_approval_rate - original_approval_rate
+        fraud_rate_increase = policy_fraud_rate - original_fraud_rate
+        
+        return {
+            'statistics': {
+                'total_transactions': total_transactions,
+                'original_approval_rate': original_approval_rate,
+                'original_fraud_rate': original_fraud_rate,
+                'policy_approval_rate': policy_approval_rate,
+                'policy_fraud_rate': policy_fraud_rate,
+                'true_fraud_rate': true_fraud_rate,
+                'approval_rate_increase': approval_rate_increase,
+                'fraud_rate_increase': fraud_rate_increase
+            }
+        }
+    
+    def run_pipeline(
+        self,
+        cutoff: float = 0.05,
+        exploration_rate: float = 0.05,
+        include_data: bool = True
+    ) -> Dict[str, Any]:
         """
         Execute the complete off-policy evaluation pipeline.
         
         Args:
-            policy_threshold: Threshold for policy evaluation (defaults to cutoff)
+            cutoff: Score threshold for the logging policy (0-1)
+            exploration_rate: Rate of exploration for blocked transactions (0-1)
+            include_data: Whether to include the full dataset in results
             
         Returns:
-            Dictionary containing data, metrics, and pipeline information
+            Dictionary containing statistics, metrics, parameters, and optionally data
         """
-        if policy_threshold is None:
-            policy_threshold = self.params['cutoff']
+        # Validate parameters
+        self._validate_pipeline_params(cutoff, exploration_rate)
         
-        # Step 1: Generate synthetic data
-        data = self.data_generator.generate_data()
+        # Step 1: Get synthetic data
+        data = self.generated_data
         
         # Step 2: Apply logging policy
-        policy_data = self.logging_policy.generate_policy(data)
+        logging_policy_generator = self._create_logging_policy_generator(cutoff, exploration_rate)
+        policy_data = logging_policy_generator.generate_policy(data)
         
-        # Step 3: Create estimator with data and estimate counterfactual metrics
-        estimator = CounterfactualValuesEstimator(
-            data=policy_data,
-            **self.estimator_params
-        )
+        # Step 3: Estimate counterfactual metrics
+        estimator = self._create_counterfactual_estimator(policy_data)
+        ope_metrics_results = estimator.estimate_policy_metrics()
         
-        metrics_results = estimator.estimate_threshold_metrics(policy_threshold)
+        # Step 4: Calculate summary statistics
+        summary_results = self._calculate_summary_statistics(policy_data)
         
-        # Calculate some basic statistics for reporting
-        total_transactions = len(policy_data)
-        observed_transactions = (policy_data['policy_action'] == 'allow').sum()
-        observation_rate = observed_transactions / total_transactions
+        # Compile parameters used in this run
+        run_parameters = self.params.copy()
+        run_parameters.update({
+            'cutoff': cutoff,
+            'exploration_rate': exploration_rate
+        })
         
-        fraud_rate_observed = policy_data[policy_data['policy_action'] == 'allow']['is_fraud'].mean()
-        fraud_rate_all = policy_data['is_fraud'].mean()
-        
+        # Compile results
         results = {
-            'data': policy_data,
-            'metrics': metrics_results,
-            'statistics': {
-                'total_transactions': total_transactions,
-                'observed_transactions': observed_transactions,
-                'observation_rate': observation_rate,
-                'fraud_rate_observed': fraud_rate_observed,
-                'fraud_rate_all': fraud_rate_all,
-                'policy_threshold': policy_threshold
-            },
-            'parameters': self.params.copy()
+            **summary_results,
+            'ope_metrics': ope_metrics_results,
+            'parameters': run_parameters
         }
         
+        if include_data:
+            results['data'] = policy_data
+            
         return results
     
-    def evaluate_multiple_thresholds(
-        self, 
-        thresholds: List[float]
-    ) -> Dict[str, Any]:
-        """
-        Evaluate the pipeline across multiple policy thresholds.
-        
-        Args:
-            thresholds: List of policy thresholds to evaluate
-            
-        Returns:
-            Dictionary with results for each threshold
-        """
-        # Generate data once
-        data = self.data_generator.generate_data()
-        policy_data = self.logging_policy.generate_policy(data)
-        
-        # Create estimator with data once
-        estimator = CounterfactualValuesEstimator(
-            data=policy_data,
-            **self.estimator_params
-        )
-        
-        results = {}
-        for threshold in thresholds:
-            metrics_results = estimator.estimate_threshold_metrics(threshold)
-            
-            results[threshold] = {
-                'metrics': metrics_results,
-                'threshold': threshold
-            }
-        
-        # Add common data and parameters
-        results['data'] = policy_data
-        results['parameters'] = self.params.copy()
-        results['thresholds'] = thresholds
-        
-        return results
-    
-    def get_data_summary(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Generate summary statistics for the pipeline data.
-        
-        Args:
-            data: DataFrame from pipeline execution
-            
-        Returns:
-            Dictionary with summary statistics
-        """
-        summary = {
-            'total_samples': len(data),
-            'fraud_rate': data['is_fraud'].mean(),
-            'mean_model_score': data['model_scores'].mean(),
-            'propensity_score_stats': {
-                'mean': data['propensity_score'].mean(),
-                'min': data['propensity_score'].min(),
-                'max': data['propensity_score'].max(),
-                'std': data['propensity_score'].std()
-            },
-            'observation_rate': (data['policy_action'] == 'allow').mean(),
-            'block_rate': (data['policy_action'] == 'block').mean()
-        }
-        
-        return summary
-    
-    def update_exploration_rate(self, new_exploration_rate: float) -> None:
-        """Update the exploration rate and reinitialize logging policy."""
-        self.params['exploration_rate'] = new_exploration_rate
-        self.logging_policy = LoggingPolicyGenerator(
-            cutoff=self.params['cutoff'],
-            exploration_rate=new_exploration_rate,
-            propensity_type=self.params['propensity_type'],
-            random_state=self.random_state
-        )
-    
-    def get_params(self) -> dict:
+    def get_params(self) -> Dict[str, Any]:
         """Return the current parameters."""
-        return self.params.copy() 
+        return self.params
+    
+    def regenerate_data(self) -> None:
+        """Force regeneration of synthetic data with current parameters."""
+        self._generated_data = None
+        # Data will be regenerated on next access to generated_data property 

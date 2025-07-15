@@ -35,7 +35,6 @@ class CounterfactualValuesEstimator:
             'precision': self._weighted_precision,
             'recall': self._weighted_recall,
             'f1': self._weighted_f1,
-            'approval_rate': self._weighted_approval_rate,
             'fraud_rate': self._weighted_fraud_rate
         }
         
@@ -65,57 +64,27 @@ class CounterfactualValuesEstimator:
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
     
-    def _compute_weighted_stats(self, y_true: np.ndarray, y_pred: np.ndarray, 
-                               weights: np.ndarray) -> Dict[str, float]:
-        """
-        Compute basic weighted statistics used by multiple metrics.
-        
-        Args:
-            y_true: True labels (0/1)
-            y_pred: Predicted labels (0/1) 
-            weights: Sample weights
-            
-        Returns:
-            Dictionary with basic weighted statistics
-        """
-        total_weights = np.sum(weights)
-        if total_weights == 0:
-            return {
-                'total_weights': 0.0,
-                'true_positives': 0.0,
-                'predicted_positives': 0.0,
-                'actual_positives': 0.0,
-                'predicted_negatives': 0.0
-            }
-        
-        true_positives = np.sum(((y_true == 1) & (y_pred == 1)) * weights)
-        predicted_positives = np.sum(y_pred * weights)
-        actual_positives = np.sum(y_true * weights)
-        predicted_negatives = total_weights - predicted_positives
-        
-        return {
-            'total_weights': total_weights,
-            'true_positives': true_positives,
-            'predicted_positives': predicted_positives,
-            'actual_positives': actual_positives,
-            'predicted_negatives': predicted_negatives
-        }
-    
     def _weighted_precision(self, y_true: np.ndarray, y_pred: np.ndarray, 
                            weights: np.ndarray) -> float:
         """Calculate weighted precision."""
-        stats = self._compute_weighted_stats(y_true, y_pred, weights)
-        if stats['predicted_positives'] == 0:
+        if len(y_pred) == 0 or np.sum(y_pred * weights) == 0:
             return 0.0
-        return stats['true_positives'] / stats['predicted_positives']
+        
+        true_positives = np.sum(((y_true == 1) & (y_pred == 1)) * weights)
+        predicted_positives = np.sum(y_pred * weights)
+        
+        return true_positives / predicted_positives
     
     def _weighted_recall(self, y_true: np.ndarray, y_pred: np.ndarray, 
                         weights: np.ndarray) -> float:
         """Calculate weighted recall."""
-        stats = self._compute_weighted_stats(y_true, y_pred, weights)
-        if stats['actual_positives'] == 0:
+        if len(y_true) == 0 or np.sum(y_true * weights) == 0:
             return 0.0
-        return stats['true_positives'] / stats['actual_positives']
+        
+        true_positives = np.sum(((y_true == 1) & (y_pred == 1)) * weights)
+        actual_positives = np.sum(y_true * weights)
+        
+        return true_positives / actual_positives
     
     def _weighted_f1(self, y_true: np.ndarray, y_pred: np.ndarray, 
                     weights: np.ndarray) -> float:
@@ -128,32 +97,16 @@ class CounterfactualValuesEstimator:
         
         return 2 * (precision * recall) / (precision + recall)
     
-    def _weighted_approval_rate(self, y_true: np.ndarray, y_pred: np.ndarray, 
-                               weights: np.ndarray) -> float:
-        """
-        Calculate weighted approval rate.
-        
-        Approval rate is the proportion of transactions that are not predicted as fraud
-        (i.e., y_pred == 0). This represents the percentage of transactions that would
-        be allowed by the policy.
-        """
-        stats = self._compute_weighted_stats(y_true, y_pred, weights)
-        if stats['total_weights'] == 0:
-            return 0.0
-        return stats['predicted_negatives'] / stats['total_weights']
-    
     def _weighted_fraud_rate(self, y_true: np.ndarray, y_pred: np.ndarray, 
-                            weights: np.ndarray) -> float:
-        """
-        Calculate weighted fraud rate.
-        
-        Fraud rate is the proportion of transactions that are actually fraudulent
-        (i.e., y_true == 1). This represents the base rate of fraud in the data.
-        """
-        stats = self._compute_weighted_stats(y_true, y_pred, weights)
-        if stats['total_weights'] == 0:
+                           weights: np.ndarray) -> float:
+        """Calculate weighted fraud rate (percentage of transactions that are fraudulent)."""
+        if len(y_true) == 0 or np.sum(weights) == 0:
             return 0.0
-        return stats['actual_positives'] / stats['total_weights']
+        
+        fraud_weight = np.sum((y_true == 1) * weights)
+        total_weight = np.sum(weights)
+        
+        return fraud_weight / total_weight
     
     def estimate_ope_metrics(self, y_pred: np.ndarray) -> Dict[str, Dict[str, float]]:
         """
