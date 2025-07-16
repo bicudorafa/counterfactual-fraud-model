@@ -14,6 +14,8 @@ dependencies = [
     "pandas",
     "scipy",
     "matplotlib",
+    "seaborn",
+    "scikit-learn",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +52,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "ipykernel>=6.29.5",
     "pytest>=8.4.1",
     "pytest-cov>=6.2.1",
     "pytest-mock>=3.14.1",

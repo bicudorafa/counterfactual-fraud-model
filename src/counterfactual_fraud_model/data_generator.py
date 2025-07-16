@@ -17,10 +17,10 @@ class DataGenerator:
     def __init__(
         self,
         alpha: float = 0.5,
-        beta_param: float = 10.0,
+        beta_param: float = 5.0,
         mean: float = 0.0,
-        sd: float = 0.1,
-        sample_size: int = 10_000,
+        sd: float = 0.5,
+        sample_size: int = 50_000,
         random_state: Optional[int] = None
     ):
         """
