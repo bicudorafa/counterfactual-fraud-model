@@ -195,6 +195,29 @@ class MLModelDataGenerator(DataGenerator):
             random_state=self.config.random_state
         )
     
+    def get_dataset_info(self) -> Dict[str, Any]:
+        """
+        Get information about the generated synthetic dataset.
+        
+        Returns:
+            Dictionary with dataset information in legacy format for compatibility
+        """
+        if self._generated_data is None:
+            raise ValueError("Must call generate_data() first")
+        
+        generation_info = self.get_generation_info()
+        dataset_info = generation_info['dataset_info']
+        
+        # Transform to match original SyntheticDataGenerator format exactly
+        return {
+            'total_samples': dataset_info['total_samples'],
+            'fraud_rate': dataset_info['fraud_rate'],
+            'fraud_count': dataset_info['fraud_count'],
+            'legitimate_count': dataset_info['legitimate_count'],
+            'n_features': self.config.n_features,
+            'model_type': self._model_trainer.get_model_info().get('model_type', 'unknown')
+        }
+    
     def regenerate_data(self) -> None:
         """Force regeneration of data with current parameters."""
         self._generated_data = None

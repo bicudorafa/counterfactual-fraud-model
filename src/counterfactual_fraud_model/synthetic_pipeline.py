@@ -2,7 +2,8 @@
 
 import pandas as pd
 from typing import Dict, Optional, Any, List
-from .synthetic_data_generator import SyntheticDataGenerator
+from .generators.implementations import DataGeneratorFactory
+from .strategies.generation import SklearnGenerationConfig
 from .logging_policy import LoggingPolicyGenerator
 from .counterfactual_estimator import CounterfactualValuesEstimator
 
@@ -144,9 +145,9 @@ class SyntheticOffPolicyEvaluationPipeline:
         return self._generated_data.copy()
     
     def _ensure_synthetic_data_generator(self) -> None:
-        """Ensure synthetic data generator is initialized."""
+        """Ensure synthetic data generator is initialized using the new factory pattern."""
         if self._synthetic_data_generator is None:
-            self._synthetic_data_generator = SyntheticDataGenerator(
+            self._synthetic_data_generator = DataGeneratorFactory.create_ml_model_generator(
                 n_samples=self._n_samples,
                 n_features=self._n_features,
                 n_informative=self._n_informative,

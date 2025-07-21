@@ -2,7 +2,8 @@
 
 import pandas as pd
 from typing import Dict, Optional, Any
-from .data_generator import DataGenerator
+from .generators.implementations import DataGeneratorFactory
+from .strategies.generation import ProbabilisticGenerationConfig
 from .logging_policy import LoggingPolicyGenerator
 from .counterfactual_estimator import CounterfactualValuesEstimator
 
@@ -112,9 +113,9 @@ class OffPolicyEvaluationPipeline:
         return self._generated_data.copy()
     
     def _ensure_data_generator(self) -> None:
-        """Ensure data generator is initialized."""
+        """Ensure data generator is initialized using the new factory pattern."""
         if self._data_generator is None:
-            self._data_generator = DataGenerator(
+            self._data_generator = DataGeneratorFactory.create_probabilistic_generator(
                 alpha=self._alpha,
                 beta_param=self._beta_param,
                 mean=self._mean,
