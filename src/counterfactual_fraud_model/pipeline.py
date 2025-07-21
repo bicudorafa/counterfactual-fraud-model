@@ -1,7 +1,7 @@
 """Off Policy Evaluation Pipeline for Counterfactual Fraud Model Simulation."""
 
 import pandas as pd
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, Optional, Any
 from .data_generator import DataGenerator
 from .logging_policy import LoggingPolicyGenerator
 from .counterfactual_estimator import CounterfactualValuesEstimator
@@ -18,11 +18,11 @@ class OffPolicyEvaluationPipeline:
     def __init__(
         self,
         # Data generator parameters
-        alpha: float = 0.5,
-        beta_param: float = 5.0,
-        mean: float = 0.0,
+        alpha: float = 0.1,
+        beta_param: float = 2.0,
+        mean: float = -0.5, # simulate the possible bias from training with selection bias
         sd: float = 0.5,
-        sample_size: int = 50_000,
+        sample_size: int = 100_000,
         # Counterfactual estimator parameters
         n_bootstrap: int = 5000,
         random_state: Optional[int] = None,
@@ -169,8 +169,8 @@ class OffPolicyEvaluationPipeline:
         true_fraud_rate = policy_data['is_fraud'].mean()
         
         # Comparative metrics
-        approval_rate_increase = policy_approval_rate - original_approval_rate
-        fraud_rate_increase = policy_fraud_rate - original_fraud_rate
+        approval_rate_increase = policy_approval_rate/original_approval_rate - 1
+        fraud_rate_increase = policy_fraud_rate/original_fraud_rate - 1
         
         return {
             'statistics': {

@@ -17,7 +17,8 @@ The goal of the this project is to generate a simulator to test multiple scenari
     - It should simulate fraud prevention system policy (aka which orders would be blocked and not) based on the cutoff value (the value for which the model would flag a model score as fraudulent), and the exploration rate (percentage of the blocked transactions that will be allowed at random)
     - The input is the data generator output, the mode cutoff (float with 0.05 as default value),and the exploration rate (float with 0.5 as default value)
     - The function will add a propensity score column (ps) that will have value 1 for allowed transactions, 0.95 for transactions bloked, and 0.05 for transaction selected at random from the blocked transaction to be allowed
-    - The function will add a action column containing the final action executed for the row
+    - The function will add a model_action column containing the action the model would take based purely on the cutoff (allow if score <= cutoff, block if score > cutoff)
+    - The function will add a policy_action column containing the final action executed for the row (includes exploration behavior)
 - Counterfactual Values Estimator
     - it should apply Counterfactual concepts to the Logging Policy Generator dataset to calculate policy metrics mean and CI
     - The input is the Logging Policy Generator returned dataframe as input, and the number of repetitions for the bootstrap estimator, and which metrics to calculate (default are precision and recall, but it should be flexible to accept a list of custom metrics)
