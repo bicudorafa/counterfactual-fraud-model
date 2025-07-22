@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Multi-parameter simulation analysis for SyntheticOffPolicyEvaluationPipeline.
+Multi-parameter simulation analysis for RefactoredSyntheticOffPolicyEvaluationPipeline.
 
 This script runs multiple simulations with different exploration rates and model types,
 generating comprehensive analysis including plots and summary tables.
+
+Updated to use the new refactored pipeline implementation with SOLID principles.
 """
 
 import numpy as np
@@ -14,7 +16,11 @@ from typing import Dict, List, Any, Optional
 from sklearn.metrics import precision_recall_curve, auc
 from sklearn.calibration import calibration_curve
 
-from src.counterfactual_fraud_model.synthetic_pipeline import SyntheticOffPolicyEvaluationPipeline
+from src.counterfactual_fraud_model import (
+    PipelineFactory,
+    SyntheticPipelineConfig,
+    RefactoredSyntheticOffPolicyEvaluationPipeline
+)
 
 
 def run_exploration_rate_simulations(
@@ -35,13 +41,28 @@ def run_exploration_rate_simulations(
     Returns:
         Tuple of (list of simulation results, reference data for plots)
     """
-    print(f"Running {len(exploration_rates)} simulations with {model_type} model...")
+    print(f"Running {len(exploration_rates)} simulations with {model_type} model using refactored pipeline...")
     
-    # Initialize pipeline with fixed parameters
-    pipeline = SyntheticOffPolicyEvaluationPipeline(
+    # Create configuration using Pydantic
+    config = SyntheticPipelineConfig(
+        n_samples=100_000,
+        n_features=30,
+        n_informative=15,
+        n_redundant=5,
+        n_repeated=0,
+        n_clusters_per_class=2,
+        weights=[0.985, 0.015],
+        flip_y=0.01,
+        class_sep=1.0,
         model_type=model_type,
+        model_params={},
+        test_size=0.3,
+        n_bootstrap=5000,
         random_state=random_state
     )
+    
+    # Initialize pipeline using improved factory pattern - pass entire config!
+    pipeline = PipelineFactory.create_synthetic_pipeline(config)
     
     # Get reference data (same for all simulations since we use same data generation params)
     reference_data = pipeline.generated_data
@@ -52,6 +73,7 @@ def run_exploration_rate_simulations(
         print(f"Running simulation {i+1}/{len(exploration_rates)} with exploration_rate={exploration_rate:.3f}")
         
         # Run pipeline with current exploration rate
+        # The new pipeline uses Pydantic validation automatically
         result = pipeline.run_pipeline(
             cutoff=cutoff,
             exploration_rate=exploration_rate,
@@ -83,7 +105,7 @@ def run_model_comparison_simulations(
     Returns:
         Tuple of (list of simulation results, dict of reference data by model type)
     """
-    print(f"Running model comparison with {len(model_types)} models...")
+    print(f"Running model comparison with {len(model_types)} models using refactored pipeline...")
     
     results = []
     reference_data = {}
@@ -91,11 +113,19 @@ def run_model_comparison_simulations(
     for i, model_type in enumerate(model_types):
         print(f"Running simulation {i+1}/{len(model_types)} with {model_type} model...")
         
-        # Initialize pipeline with current model type
-        pipeline = SyntheticOffPolicyEvaluationPipeline(
+        # Create configuration using Pydantic
+        config = SyntheticPipelineConfig(
+            n_samples=100_000,
+            n_features=30,
+            n_informative=15,
+            n_redundant=5,
             model_type=model_type,
+            test_size=0.3,
             random_state=random_state
         )
+        
+        # Initialize pipeline using improved factory pattern - pass entire config!
+        pipeline = PipelineFactory.create_synthetic_pipeline(config)
         
         # Get reference data for this model
         reference_data[model_type] = pipeline.generated_data
@@ -120,7 +150,7 @@ def plot_model_scores_histogram(data: pd.DataFrame, title_suffix: str = "") -> N
     plt.hist(data['model_scores'], bins=50, alpha=0.7, edgecolor='black')
     plt.xlabel('Model Scores')
     plt.ylabel('Frequency')
-    plt.title(f'Distribution of Model Scores{title_suffix}')
+    plt.title(f'Distribution of Model Scores{title_suffix} (Refactored Pipeline)')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -137,7 +167,7 @@ def plot_model_scores_comparison(reference_data: Dict[str, pd.DataFrame]) -> Non
         plt.hist(data['model_scores'], bins=30, alpha=0.7, edgecolor='black')
         plt.xlabel('Model Scores')
         plt.ylabel('Frequency')
-        plt.title(f'{model_type.replace("_", " ").title()} Model')
+        plt.title(f'{model_type.replace("_", " ").title()} Model\n(Refactored Pipeline)')
         plt.grid(True, alpha=0.3)
     
     plt.tight_layout()
@@ -152,7 +182,7 @@ def create_synthetic_data_summary_table(data: pd.DataFrame, pipeline_params: Dic
     summary_data = {
         'Metric': [
             'Total Transactions', 'True Fraud Rate', 'N Samples', 'N Features', 
-            'N Informative', 'N Redundant', 'Model Type', 'Test Size', 'Class Sep'
+            'N Informative', 'N Redundant', 'Model Type', 'Test Size', 'Class Sep', 'Pipeline Type'
         ],
         'Value': [
             total_transactions,
@@ -163,7 +193,8 @@ def create_synthetic_data_summary_table(data: pd.DataFrame, pipeline_params: Dic
             pipeline_params['n_redundant'],
             pipeline_params['model_type'],
             pipeline_params['test_size'],
-            pipeline_params['class_sep']
+            pipeline_params['class_sep'],
+            'Refactored (SOLID Principles)'
         ]
     }
     
@@ -185,7 +216,7 @@ def plot_calibration_curve(data: pd.DataFrame, title_suffix: str = "") -> None:
     
     plt.xlabel('Mean Predicted Probability')
     plt.ylabel('Fraction of Positives')
-    plt.title(f'Calibration Plot{title_suffix}')
+    plt.title(f'Calibration Plot{title_suffix} (Refactored Pipeline)')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -204,7 +235,7 @@ def plot_precision_recall_curve(data: pd.DataFrame, title_suffix: str = "") -> N
     plt.plot(recall, precision, linewidth=2, label=f'PR Curve (AUC = {auc_score:.3f})')
     plt.xlabel('Recall')
     plt.ylabel('Precision')
-    plt.title(f'Precision-Recall Curve{title_suffix}')
+    plt.title(f'Precision-Recall Curve{title_suffix} (Refactored Pipeline)')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -276,7 +307,7 @@ def plot_ope_metrics(results: List[Dict[str, Any]], comparison_key: str = 'explo
         
         ax.set_xlabel(comparison_key.replace('_', ' ').title())
         ax.set_ylabel(metric.replace('_', ' ').title())
-        ax.set_title(f'OPE Metric: {metric.replace("_", " ").title()}')
+        ax.set_title(f'OPE Metric: {metric.replace("_", " ").title()} (Refactored)')
         ax.legend()
         ax.grid(True, alpha=0.3)
     
@@ -310,7 +341,7 @@ def plot_model_performance_comparison(results: List[Dict[str, Any]]) -> None:
     for i, metric in enumerate(metrics):
         ax = axes[i]
         bars = ax.bar(model_types, metric_data[metric])
-        ax.set_title(f'Model {metric.replace("_", " ").title()}')
+        ax.set_title(f'Model {metric.replace("_", " ").title()} (Refactored Pipeline)')
         ax.set_ylabel(metric.replace('_', ' ').title())
         ax.set_xlabel('Model Type')
         
@@ -326,9 +357,55 @@ def plot_model_performance_comparison(results: List[Dict[str, Any]]) -> None:
     plt.show()
 
 
+def demonstrate_pydantic_features(config: SyntheticPipelineConfig) -> None:
+    """Demonstrate Pydantic configuration features for synthetic pipeline."""
+    print("\n" + "=" * 60)
+    print("PYDANTIC CONFIGURATION FEATURES")
+    print("=" * 60)
+    
+    # Create pipeline using improved factory pattern
+    pipeline = PipelineFactory.create_synthetic_pipeline(config)
+    
+    # Get configuration as dictionary
+    config_dict = pipeline.get_params()
+    print(f"✅ Configuration extracted: {len(config_dict)} parameters")
+    
+    # Show JSON serialization
+    import json
+    config_json = json.dumps(config_dict, indent=2)
+    print(f"✅ JSON serialization available ({len(config_json)} characters)")
+    print("  Sample JSON:")
+    print("  " + config_json[:300] + "...")
+    
+    # Show configuration validation worked
+    print(f"✅ Validation passed for:")
+    print(f"  - N samples: {config_dict['n_samples']} (must be > 0)")
+    print(f"  - N features: {config_dict['n_features']} (must be > 0)")
+    print(f"  - N informative: {config_dict['n_informative']} (must be <= n_features)")
+    print(f"  - Model type: {config_dict['model_type']} (must be valid)")
+    print(f"  - Test size: {config_dict['test_size']} (must be 0-1)")
+    
+    # Show model performance features
+    try:
+        model_perf = pipeline.get_model_performance()
+        print(f"✅ Model performance available: {len(model_perf)} metrics")
+        print(f"  - ROC AUC: {model_perf.get('roc_auc', 'N/A'):.3f}")
+        print(f"  - F1 Score: {model_perf.get('f1_score', 'N/A'):.3f}")
+    except:
+        print("⚠️  Model performance not yet available (data not generated)")
+    
+    # Demonstrate config object benefits
+    print(f"✅ Configuration object benefits:")
+    print(f"  - Direct config → factory: PipelineFactory.create_synthetic_pipeline(config)")
+    print(f"  - No parameter duplication or unpacking needed")
+    print(f"  - Type safety and validation at config creation time")
+    print(f"  - Easy to extend with new parameters")
+
+
 def run_exploration_rate_analysis(exploration_rates: np.ndarray, model_type: str = "lightgbm"):
     """Run complete exploration rate analysis."""
     print(f"\nExploration Rate Analysis with {model_type} model")
+    print("Using REFACTORED Synthetic Pipeline")
     print("=" * 60)
     
     # Run simulations
@@ -337,8 +414,27 @@ def run_exploration_rate_analysis(exploration_rates: np.ndarray, model_type: str
     # Get pipeline parameters for summary table
     pipeline_params = results[0]['parameters']
     
+    # Demonstrate configuration features using config object directly
+    config = SyntheticPipelineConfig(
+        n_samples=pipeline_params['n_samples'],
+        n_features=pipeline_params['n_features'],
+        n_informative=pipeline_params['n_informative'],
+        n_redundant=pipeline_params['n_redundant'],
+        n_repeated=pipeline_params['n_repeated'],
+        n_clusters_per_class=pipeline_params['n_clusters_per_class'],
+        weights=pipeline_params['weights'],
+        flip_y=pipeline_params['flip_y'],
+        class_sep=pipeline_params['class_sep'],
+        model_type=pipeline_params['model_type'],
+        model_params=pipeline_params['model_params'],
+        test_size=pipeline_params['test_size'],
+        n_bootstrap=pipeline_params['n_bootstrap'],
+        random_state=pipeline_params.get('random_state')
+    )
+    demonstrate_pydantic_features(config)
+    
     print("\nGenerating visualizations and tables...")
-    print("=" * 50)
+    print("=" * 60)
     
     # 1. Plot model scores histogram
     print("1. Generating model scores histogram...")
@@ -372,13 +468,14 @@ def run_exploration_rate_analysis(exploration_rates: np.ndarray, model_type: str
 def run_model_comparison_analysis(model_types: List[str]):
     """Run complete model comparison analysis."""
     print(f"\nModel Comparison Analysis")
+    print("Using REFACTORED Synthetic Pipeline")
     print("=" * 60)
     
     # Run simulations
     results, reference_data = run_model_comparison_simulations(model_types)
     
     print("\nGenerating visualizations and tables...")
-    print("=" * 50)
+    print("=" * 60)
     
     # 1. Plot model scores comparison
     print("1. Generating model scores comparison...")
@@ -408,6 +505,7 @@ def run_model_comparison_analysis(model_types: List[str]):
 def main():
     """Main function to run simulations and generate all plots and tables."""
     print("Starting Synthetic Multi-Parameter Simulation Analysis")
+    print("Using REFACTORED Pipeline with SOLID Principles")
     print("=" * 60)
     
     # Configuration for exploration rate analysis
@@ -416,14 +514,30 @@ def main():
     # Configuration for model comparison
     model_types = ["lightgbm", "random_forest", "logistic"]
     
+    print(f"\nConfiguration:")
+    print(f"  - Exploration rates: {len(exploration_rates)} values from {exploration_rates[0]:.3f} to {exploration_rates[-1]:.3f}")
+    print(f"  - Model types: {', '.join(model_types)}")
+    print(f"  - Using: RefactoredSyntheticOffPolicyEvaluationPipeline")
+    print(f"  - Factory pattern: PipelineFactory")
+    print(f"  - Configuration: SyntheticPipelineConfig (Pydantic)")
+    
     # Run exploration rate analysis with LightGBM
     run_exploration_rate_analysis(exploration_rates, model_type="lightgbm")
     
     # Run model comparison analysis
     run_model_comparison_analysis(model_types)
     
-    print("\nAll analyses complete!")
+    print("\nAll refactored synthetic pipeline analyses complete!")
     print("=" * 60)
+    print("\n🎯 Benefits Demonstrated:")
+    print("  ✅ SOLID principles compliance")
+    print("  ✅ Pydantic validation and serialization for synthetic data")
+    print("  ✅ Factory pattern for pipeline creation")
+    print("  ✅ Template Method pattern for consistent workflow")
+    print("  ✅ Strategy pattern for ML model data generation")
+    print("  ✅ Model performance tracking and comparison")
+    print("  ✅ Enhanced configuration management")
+    print("  ✅ Improved maintainability and extensibility")
 
 
 if __name__ == "__main__":

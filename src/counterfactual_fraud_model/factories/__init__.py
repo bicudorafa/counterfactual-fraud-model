@@ -1,17 +1,28 @@
-"""Factory classes for creating various components."""
+"""Factory classes for object creation following the Factory pattern."""
 
 from .model_trainers import (
+    ModelTrainerFactory,
     LightGBMTrainer,
     RandomForestTrainer,
     LogisticRegressionTrainer,
-    ModelTrainerFactory,
     ModelEvaluator
 )
 
+from .pipeline_components import (
+    StatisticsCalculatorFactory,
+    DefaultStatisticsCalculator,
+    PipelineStrategyFactory
+)
+
 __all__ = [
-    "LightGBMTrainer",
-    "RandomForestTrainer",
-    "LogisticRegressionTrainer",
-    "ModelTrainerFactory",
-    "ModelEvaluator"
+    # Model trainers
+    'ModelTrainerFactory',
+    'LightGBMTrainer', 
+    'RandomForestTrainer',
+    'LogisticRegressionTrainer',
+    'ModelEvaluator',
+    # Pipeline components
+    'StatisticsCalculatorFactory',
+    'DefaultStatisticsCalculator',
+    'PipelineStrategyFactory'
 ] 

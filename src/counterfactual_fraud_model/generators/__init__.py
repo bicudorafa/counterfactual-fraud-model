@@ -1,4 +1,4 @@
-"""Concrete data generator implementations."""
+"""Data generator implementations following SOLID principles."""
 
 from .implementations import (
     ProbabilisticDataGenerator,
@@ -6,8 +6,19 @@ from .implementations import (
     DataGeneratorFactory
 )
 
+from .pipeline_implementations import (
+    RefactoredOffPolicyEvaluationPipeline,
+    RefactoredSyntheticOffPolicyEvaluationPipeline,
+    PipelineFactory
+)
+
 __all__ = [
-    "ProbabilisticDataGenerator",
-    "MLModelDataGenerator", 
-    "DataGeneratorFactory"
+    # Data generators
+    'ProbabilisticDataGenerator',
+    'MLModelDataGenerator', 
+    'DataGeneratorFactory',
+    # Pipeline implementations
+    'RefactoredOffPolicyEvaluationPipeline',
+    'RefactoredSyntheticOffPolicyEvaluationPipeline',
+    'PipelineFactory'
 ] 

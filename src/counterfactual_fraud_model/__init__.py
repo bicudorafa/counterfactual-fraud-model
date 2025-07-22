@@ -43,35 +43,64 @@ from .counterfactual_estimator import CounterfactualValuesEstimator
 from .pipeline import OffPolicyEvaluationPipeline
 from .synthetic_pipeline import SyntheticOffPolicyEvaluationPipeline
 
+# New refactored pipeline implementations with SOLID principles
+from .generators.pipeline_implementations import (
+    RefactoredOffPolicyEvaluationPipeline,
+    RefactoredSyntheticOffPolicyEvaluationPipeline,
+    PipelineFactory
+)
+
+# Pipeline configuration objects
+from .strategies.generation import (
+    ProbabilisticPipelineConfig,
+    SyntheticPipelineConfig,
+    PipelineExecutionConfig
+)
+
+# Pipeline factories and utilities
+from .factories.pipeline_components import (
+    StatisticsCalculatorFactory,
+    PipelineStrategyFactory
+)
+
 __version__ = "0.3.0"
 __author__ = "Counterfactual Fraud Model Team"
 
 # Backward compatibility exports
 __all__ = [
-    # Original API (unchanged)
+    # Original backward-compatible API
     "DataGenerator",
-    "SyntheticDataGenerator",
-    "LoggingPolicyGenerator", 
-    "CounterfactualValuesEstimator",
+    "SyntheticDataGenerator", 
     "OffPolicyEvaluationPipeline",
     "SyntheticOffPolicyEvaluationPipeline",
+    "LoggingPolicyGenerator",
+    "CounterfactualValuesEstimator",
     
-    # New refactored API
-    "BaseDataGenerator",
-    "DataGenerationConfig", 
+    # Refactored modular components
     "ProbabilisticGenerationConfig",
-    "SklearnGenerationConfig",
-    "ProbabilisticGenerationStrategy",
-    "SklearnGenerationStrategy",
-    "ModelTrainerFactory",
-    "ModelEvaluator",
+    "SklearnGenerationConfig", 
     "ProbabilisticDataGenerator",
     "MLModelDataGenerator",
     "DataGeneratorFactory",
+    "ModelTrainerFactory",
+    "LightGBMTrainer",
+    "RandomForestTrainer", 
+    "LogisticRegressionTrainer",
+    "ModelEvaluator",
     
-    # Compatibility adapters
+    # New refactored pipeline implementations
+    "RefactoredOffPolicyEvaluationPipeline",
+    "RefactoredSyntheticOffPolicyEvaluationPipeline",
+    "PipelineFactory",
+    "ProbabilisticPipelineConfig",
+    "SyntheticPipelineConfig",
+    "PipelineExecutionConfig",
+    "StatisticsCalculatorFactory",
+    "PipelineStrategyFactory",
+    
+    # Legacy adapters for backward compatibility
     "LegacyDataGenerator",
-    "LegacySyntheticDataGenerator",
+    "LegacySyntheticDataGenerator"
 ]
 
 
