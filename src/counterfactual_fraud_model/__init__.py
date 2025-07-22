@@ -11,6 +11,7 @@ from .logging_policy import LoggingPolicyGenerator
 from .counterfactual_estimator import CounterfactualValuesEstimator
 from .pipeline import OffPolicyEvaluationPipeline
 from .synthetic_pipeline import SyntheticOffPolicyEvaluationPipeline
+from .synthetic_retraining_pipeline import SyntheticRetrainingPipeline
 
 __version__ = "0.1.0"
 __author__ = "Counterfactual Fraud Model Team"
@@ -22,6 +23,7 @@ __all__ = [
     "CounterfactualValuesEstimator",
     "OffPolicyEvaluationPipeline",
     "SyntheticOffPolicyEvaluationPipeline",
+    "SyntheticRetrainingPipeline",
 ]
 
 
