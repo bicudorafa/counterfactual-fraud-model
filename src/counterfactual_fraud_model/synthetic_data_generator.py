@@ -77,10 +77,9 @@ class SyntheticDataGenerator:
         self._validate_params()
         
         # Internal state
-        self._X = None
-        self._y = None
         self._model = None
-        self._generated_data = None
+        self._train_data = None
+        self._test_data = None
         
     def _validate_params(self) -> None:
         """Validate initialization parameters."""
@@ -164,15 +163,22 @@ class SyntheticDataGenerator:
         Generate synthetic fraud data with trained model scores.
         
         Returns:
-            DataFrame with columns: model_scores, is_fraud
+            DataFrame with entire test dataset: all features + is_fraud + model_scores
             Compatible with LoggingPolicyGenerator and existing pipeline
         """
-        if self._generated_data is not None:
-            return self._generated_data.copy()
+        # Check if test data with scores already exists
+        if self._test_data is not None and self._model is not None:
+            # Return cached result with entire test dataset plus model scores
+            test_features = self._test_data.drop('is_fraud', axis=1).values
+            test_model_scores = self._model.predict_proba(test_features)[:, 1]
+            
+            # Create result with all features + is_fraud + model_scores
+            result = self._test_data.copy()
+            result['model_scores'] = test_model_scores
+            return result
         
         # Generate synthetic dataset
         X, y = self._generate_synthetic_dataset()
-        self._X, self._y = X, y
         
         # Split data for training
         X_train, X_test, y_train, y_test = train_test_split(
@@ -182,20 +188,26 @@ class SyntheticDataGenerator:
             random_state=self.random_state
         )
         
+        # Store train and test data with original DataFrame structure
+        # Each feature as a separate column
+        train_df = pd.DataFrame(X_train, columns=[f'feature_{i}' for i in range(X_train.shape[1])])
+        train_df['is_fraud'] = y_train
+        self._train_data = train_df
+        
+        test_df = pd.DataFrame(X_test, columns=[f'feature_{i}' for i in range(X_test.shape[1])])
+        test_df['is_fraud'] = y_test
+        self._test_data = test_df
+        
         # Train model
         self._model = self._train_model(X_train, y_train)
         
-        # Get predictions on the full dataset (both train and test)
-        # This simulates having model scores for all transactions
-        model_scores = self._model.predict_proba(X)[:, 1]  # Probability of fraud class
+        # Get predictions on TEST dataset only
+        test_model_scores = self._model.predict_proba(X_test)[:, 1]  # Probability of fraud class
         
-        # Create DataFrame with required format
-        self._generated_data = pd.DataFrame({
-            'model_scores': model_scores,
-            'is_fraud': y
-        })
-        
-        return self._generated_data.copy()
+        # Return entire test dataset with all features + is_fraud + model_scores
+        result = self._test_data.copy()
+        result['model_scores'] = test_model_scores
+        return result
     
     def get_model_performance(self) -> Dict[str, float]:
         """
@@ -204,22 +216,18 @@ class SyntheticDataGenerator:
         Returns:
             Dictionary with performance metrics
         """
-        if self._model is None or self._X is None or self._y is None:
+        if self._model is None or self._test_data is None:
             raise ValueError("Must call generate_data() first to train model")
         
         from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score
         
-        # Split data again for evaluation
-        X_train, X_test, y_train, y_test = train_test_split(
-            self._X, self._y,
-            test_size=self.test_size,
-            stratify=self._y,
-            random_state=self.random_state
-        )
+        # Use stored test data for evaluation
+        test_features = self._test_data.drop('is_fraud', axis=1).values
+        y_test = self._test_data['is_fraud'].values
         
         # Get predictions
-        y_pred = self._model.predict(X_test)
-        y_prob = self._model.predict_proba(X_test)[:, 1]
+        y_pred = self._model.predict(test_features)
+        y_prob = self._model.predict_proba(test_features)[:, 1]
         
         # Calculate metrics
         metrics = {
@@ -238,19 +246,47 @@ class SyntheticDataGenerator:
         Returns:
             Dictionary with dataset information
         """
-        if self._y is None:
+        if self._train_data is None or self._test_data is None:
             raise ValueError("Must call generate_data() first")
         
-        fraud_rate = np.mean(self._y)
+        # Combine train and test labels to get full dataset info
+        all_labels = np.concatenate([
+            self._train_data['is_fraud'].values,
+            self._test_data['is_fraud'].values
+        ])
+        
+        fraud_rate = np.mean(all_labels)
         
         return {
-            'total_samples': len(self._y),
+            'total_samples': len(all_labels),
             'fraud_rate': fraud_rate,
-            'fraud_count': np.sum(self._y),
-            'legitimate_count': len(self._y) - np.sum(self._y),
+            'fraud_count': np.sum(all_labels),
+            'legitimate_count': len(all_labels) - np.sum(all_labels),
             'n_features': self.n_features,
             'model_type': self.model_type
         }
+    
+    def get_train_data(self) -> pd.DataFrame:
+        """
+        Get the training data.
+        
+        Returns:
+            DataFrame with training data (feature_0, feature_1, ..., feature_n, is_fraud columns)
+        """
+        if self._train_data is None:
+            raise ValueError("Must call generate_data() first to generate train data")
+        return self._train_data.copy()
+    
+    def get_test_data(self) -> pd.DataFrame:
+        """
+        Get the test data.
+        
+        Returns:
+            DataFrame with test data (feature_0, feature_1, ..., feature_n, is_fraud columns)
+        """
+        if self._test_data is None:
+            raise ValueError("Must call generate_data() first to generate test data")
+        return self._test_data.copy()
     
     def get_params(self) -> Dict[str, Any]:
         """Return the current parameters."""
@@ -273,8 +309,7 @@ class SyntheticDataGenerator:
     
     def regenerate_data(self) -> None:
         """Force regeneration of synthetic data with current parameters."""
-        self._generated_data = None
-        self._X = None
-        self._y = None
         self._model = None
+        self._train_data = None
+        self._test_data = None
         # Data will be regenerated on next call to generate_data() 
