@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional
 from sklearn.metrics import precision_recall_curve, auc
 from sklearn.calibration import calibration_curve
 
-from src.counterfactual_fraud_model import (
+from counterfactual_fraud_model import (
     SyntheticOffPolicyEvaluationPipeline,
     SyntheticOffPolicyEvaluationConfig,
     SyntheticDataConfig,
