@@ -14,7 +14,16 @@ from typing import Dict, List, Any, Optional
 from sklearn.metrics import precision_recall_curve, auc
 from sklearn.calibration import calibration_curve
 
-from src.counterfactual_fraud_model.synthetic_pipeline import SyntheticOffPolicyEvaluationPipeline
+from src.counterfactual_fraud_model import (
+    SyntheticOffPolicyEvaluationPipeline,
+    SyntheticOffPolicyEvaluationConfig,
+    SyntheticDataConfig,
+    ModelConfig,
+    LoggingPolicyConfig,
+    CounterfactualEstimatorConfig,
+    PipelineConfig,
+    ModelType
+)
 
 
 def run_exploration_rate_simulations(
@@ -37,21 +46,41 @@ def run_exploration_rate_simulations(
     """
     print(f"Running {len(exploration_rates)} simulations with {model_type} model...")
     
-    # Initialize pipeline with fixed parameters
-    pipeline = SyntheticOffPolicyEvaluationPipeline(
-        model_type=model_type,
-        random_state=random_state
+    # Convert string model type to enum
+    if model_type == "lightgbm":
+        model_type_enum = ModelType.LIGHTGBM
+    elif model_type == "random_forest":
+        model_type_enum = ModelType.RANDOM_FOREST
+    elif model_type == "logistic":
+        model_type_enum = ModelType.LOGISTIC
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+    
+    # Create configuration for the pipeline
+    config = SyntheticOffPolicyEvaluationConfig(
+        synthetic_data=SyntheticDataConfig(random_state=random_state),
+        model=ModelConfig(model_type=model_type_enum, random_state=random_state),
+        logging_policy=LoggingPolicyConfig(
+            cutoff=cutoff,
+            exploration_rate=0.05,  # Default, will be overridden in loop
+            random_state=random_state
+        ),
+        counterfactual_estimator=CounterfactualEstimatorConfig(random_state=random_state),
+        pipeline=PipelineConfig(include_data=False)
     )
     
+    # Initialize pipeline with configuration
+    pipeline = SyntheticOffPolicyEvaluationPipeline(config)
+    
     # Get reference data (same for all simulations since we use same data generation params)
-    reference_data = pipeline.generated_data
+    reference_data = pipeline._get_or_generate_data()
     
     results = []
     
     for i, exploration_rate in enumerate(exploration_rates):
         print(f"Running simulation {i+1}/{len(exploration_rates)} with exploration_rate={exploration_rate:.3f}")
         
-        # Run pipeline with current exploration rate
+        # Run pipeline with current exploration rate (overrides config)
         result = pipeline.run_pipeline(
             cutoff=cutoff,
             exploration_rate=exploration_rate,
@@ -91,14 +120,34 @@ def run_model_comparison_simulations(
     for i, model_type in enumerate(model_types):
         print(f"Running simulation {i+1}/{len(model_types)} with {model_type} model...")
         
-        # Initialize pipeline with current model type
-        pipeline = SyntheticOffPolicyEvaluationPipeline(
-            model_type=model_type,
-            random_state=random_state
+        # Convert string model type to enum
+        if model_type == "lightgbm":
+            model_type_enum = ModelType.LIGHTGBM
+        elif model_type == "random_forest":
+            model_type_enum = ModelType.RANDOM_FOREST
+        elif model_type == "logistic":
+            model_type_enum = ModelType.LOGISTIC
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+        
+        # Create configuration for current model type
+        config = SyntheticOffPolicyEvaluationConfig(
+            synthetic_data=SyntheticDataConfig(random_state=random_state),
+            model=ModelConfig(model_type=model_type_enum, random_state=random_state),
+            logging_policy=LoggingPolicyConfig(
+                cutoff=cutoff,
+                exploration_rate=exploration_rate,
+                random_state=random_state
+            ),
+            counterfactual_estimator=CounterfactualEstimatorConfig(random_state=random_state),
+            pipeline=PipelineConfig(include_data=False)
         )
         
+        # Initialize pipeline with configuration
+        pipeline = SyntheticOffPolicyEvaluationPipeline(config)
+        
         # Get reference data for this model
-        reference_data[model_type] = pipeline.generated_data
+        reference_data[model_type] = pipeline._get_or_generate_data()
         
         # Run pipeline
         result = pipeline.run_pipeline(
@@ -149,6 +198,10 @@ def create_synthetic_data_summary_table(data: pd.DataFrame, pipeline_params: Dic
     total_transactions = len(data)
     true_fraud_rate = data['is_fraud'].mean()
     
+    # Extract parameters from nested structure
+    synthetic_data_params = pipeline_params['synthetic_data']
+    model_params = pipeline_params['model']
+    
     summary_data = {
         'Metric': [
             'Total Transactions', 'True Fraud Rate', 'N Samples', 'N Features', 
@@ -157,13 +210,13 @@ def create_synthetic_data_summary_table(data: pd.DataFrame, pipeline_params: Dic
         'Value': [
             total_transactions,
             f"{true_fraud_rate:.4f}",
-            pipeline_params['n_samples'],
-            pipeline_params['n_features'], 
-            pipeline_params['n_informative'],
-            pipeline_params['n_redundant'],
-            pipeline_params['model_type'],
-            pipeline_params['test_size'],
-            pipeline_params['class_sep']
+            synthetic_data_params['n_samples'],
+            synthetic_data_params['n_features'], 
+            synthetic_data_params['n_informative'],
+            synthetic_data_params['n_redundant'],
+            model_params['model_type'],
+            synthetic_data_params['test_size'],
+            synthetic_data_params['class_sep']
         ]
     }
     
@@ -221,10 +274,13 @@ def create_policy_metrics_table(results: List[Dict[str, Any]], comparison_key: s
         
         row_data = {
             comparison_key: comparison_value,
-            'policy_approval_rate': stats['policy_approval_rate'],
-            'policy_fraud_rate': stats['policy_fraud_rate'],
-            'approval_rate_increase': stats['approval_rate_increase'],
-            'fraud_rate_increase': stats['fraud_rate_increase']
+            'allow_rate': stats['allow_rate'],
+            'block_rate': stats['block_rate'],
+            'fraud_rate_overall': stats['fraud_rate_overall'],
+            'fraud_rate_allowed': stats['fraud_rate_allowed'],
+            'total_transactions': stats['total_transactions'],
+            'allowed_transactions': stats['allowed_transactions'],
+            'blocked_transactions': stats['blocked_transactions']
         }
         
         # Add model performance metrics if available
@@ -234,7 +290,7 @@ def create_policy_metrics_table(results: List[Dict[str, Any]], comparison_key: s
                 'model_roc_auc': model_perf['roc_auc'],
                 'model_precision': model_perf['precision'],
                 'model_recall': model_perf['recall'],
-                'model_f1': model_perf['f1_score']
+                'model_f1': model_perf['f1']
             })
         
         table_data.append(row_data)
@@ -263,16 +319,16 @@ def plot_ope_metrics(results: List[Dict[str, Any]], comparison_key: str = 'explo
     for i, metric in enumerate(metrics):
         ax = axes[i]
         
-        # Extract metric values
-        means = [result['ope_metrics'][metric]['mean'] for result in results]
-        p025 = [result['ope_metrics'][metric]['p025'] for result in results]
-        p975 = [result['ope_metrics'][metric]['p975'] for result in results]
+        # Extract metric values (updated for new structure)
+        estimates = [result['ope_metrics'][metric]['mean'] for result in results]
+        ci_lower = [result['ope_metrics'][metric]['p025'] for result in results]
+        ci_upper = [result['ope_metrics'][metric]['p975'] for result in results]
         
-        # Plot mean line
-        ax.plot(comparison_values, means, 'o-', linewidth=2, markersize=6, label='Mean')
+        # Plot estimate line
+        ax.plot(comparison_values, estimates, 'o-', linewidth=2, markersize=6, label='Estimate')
         
         # Plot confidence interval
-        ax.fill_between(comparison_values, p025, p975, alpha=0.3, label='95% CI')
+        ax.fill_between(comparison_values, ci_lower, ci_upper, alpha=0.3, label='95% CI')
         
         ax.set_xlabel(comparison_key.replace('_', ' ').title())
         ax.set_ylabel(metric.replace('_', ' ').title())
@@ -297,7 +353,7 @@ def plot_model_performance_comparison(results: List[Dict[str, Any]]) -> None:
     # Extract data for plotting
     model_types = [result['parameters']['model_type'] for result in results]
     
-    metrics = ['roc_auc', 'precision', 'recall', 'f1_score']
+    metrics = ['roc_auc', 'precision', 'recall', 'f1']
     metric_data = {}
     
     for metric in metrics:

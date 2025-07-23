@@ -13,7 +13,14 @@ from typing import Dict, List, Any
 from sklearn.metrics import precision_recall_curve, auc
 from sklearn.calibration import calibration_curve
 
-from src.counterfactual_fraud_model.pipeline import OffPolicyEvaluationPipeline
+from src.counterfactual_fraud_model import (
+    OffPolicyEvaluationPipeline,
+    OffPolicyEvaluationConfig,
+    DataGeneratorConfig,
+    LoggingPolicyConfig,
+    CounterfactualEstimatorConfig,
+    PipelineConfig
+)
 
 
 def run_simulations(exploration_rates: np.ndarray, 
@@ -32,19 +39,36 @@ def run_simulations(exploration_rates: np.ndarray,
     """
     print(f"Running {len(exploration_rates)} simulations...")
     
-    # Initialize pipeline with fixed parameters
-    pipeline = OffPolicyEvaluationPipeline(random_state=random_state)
+    # Create configuration for the pipeline
+    config = OffPolicyEvaluationConfig(
+        data_generator=DataGeneratorConfig(
+            # HACK: erase later
+            sample_size=20_000,
+            random_state=random_state
+        ),
+        logging_policy=LoggingPolicyConfig(
+            cutoff=cutoff,
+            exploration_rate=0.05,  # Default, will be overridden in loop
+            random_state=random_state
+        ),
+        counterfactual_estimator=CounterfactualEstimatorConfig(random_state=random_state),
+        pipeline=PipelineConfig(include_data=False)
+    )
+    
+    # Initialize pipeline with configuration
+    pipeline = OffPolicyEvaluationPipeline(config)
     
     # Get reference data (same for all simulations since we use same data generation params)
-    reference_data = pipeline.generated_data
+    reference_data = pipeline._get_or_generate_data()
     
     results = []
     
     for i, exploration_rate in enumerate(exploration_rates):
         print(f"Running simulation {i+1}/{len(exploration_rates)} with exploration_rate={exploration_rate:.3f}")
         
-        # Run pipeline with current exploration rate
+        # Run pipeline with current exploration rate (overrides config)
         result = pipeline.run_pipeline(
+            # TODO: review this funcionality. It doesn't make sense to have a cutoff and exploration rate as config if they can be changed in the run_pipeline method.
             cutoff=cutoff,
             exploration_rate=exploration_rate,
             include_data=False  # Don't include data to save memory
@@ -74,16 +98,19 @@ def create_data_summary_table(data: pd.DataFrame, pipeline_params: Dict[str, Any
     total_transactions = len(data)
     true_fraud_rate = data['is_fraud'].mean()
     
+    # Extract data generator parameters from nested structure
+    data_gen_params = pipeline_params['data_generator']
+    
     summary_data = {
         'Metric': ['Total Transactions', 'True Fraud Rate', 'Alpha', 'Beta', 'Mean', 'SD', 'Sample Size'],
         'Value': [
             total_transactions,
             f"{true_fraud_rate:.4f}",
-            pipeline_params['alpha'],
-            pipeline_params['beta_param'], 
-            pipeline_params['mean'],
-            pipeline_params['sd'],
-            pipeline_params['sample_size']
+            data_gen_params['alpha'],
+            data_gen_params['beta_param'], 
+            data_gen_params['mean'],
+            data_gen_params['sd'],
+            data_gen_params['sample_size']
         ]
     }
     
@@ -141,10 +168,13 @@ def create_policy_metrics_table(results: List[Dict[str, Any]]) -> pd.DataFrame:
         
         table_data.append({
             'exploration_rate': exploration_rate,
-            'policy_approval_rate': stats['policy_approval_rate'],
-            'policy_fraud_rate': stats['policy_fraud_rate'],
-            'approval_rate_increase': stats['approval_rate_increase'],
-            'fraud_rate_increase': stats['fraud_rate_increase']
+            'allow_rate': stats['allow_rate'],
+            'block_rate': stats['block_rate'],
+            'fraud_rate_overall': stats['fraud_rate_overall'],
+            'fraud_rate_allowed': stats['fraud_rate_allowed'],
+            'total_transactions': stats['total_transactions'],
+            'allowed_transactions': stats['allowed_transactions'],
+            'blocked_transactions': stats['blocked_transactions']
         })
     
     return pd.DataFrame(table_data)
@@ -171,16 +201,16 @@ def plot_ope_metrics(results: List[Dict[str, Any]]) -> None:
     for i, metric in enumerate(metrics):
         ax = axes[i]
         
-        # Extract metric values
-        means = [result['ope_metrics'][metric]['mean'] for result in results]
-        p025 = [result['ope_metrics'][metric]['p025'] for result in results]
-        p975 = [result['ope_metrics'][metric]['p975'] for result in results]
+        # Extract metric values (updated for new structure)
+        estimates = [result['ope_metrics'][metric]['mean'] for result in results]
+        ci_lower = [result['ope_metrics'][metric]['p025'] for result in results]
+        ci_upper = [result['ope_metrics'][metric]['p975'] for result in results]
         
-        # Plot mean line
-        ax.plot(exploration_rates, means, 'o-', linewidth=2, markersize=6, label='Mean')
+        # Plot estimate line
+        ax.plot(exploration_rates, estimates, 'o-', linewidth=2, markersize=6, label='Estimate')
         
         # Plot confidence interval
-        ax.fill_between(exploration_rates, p025, p975, alpha=0.3, label='95% CI')
+        ax.fill_between(exploration_rates, ci_lower, ci_upper, alpha=0.3, label='95% CI')
         
         ax.set_xlabel('Exploration Rate')
         ax.set_ylabel(metric.replace('_', ' ').title())
