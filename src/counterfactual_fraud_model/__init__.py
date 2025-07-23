@@ -60,13 +60,13 @@ from .pipelines import (
 )
 
 # Legacy imports for backward compatibility
-from .data_generator import DataGenerator as LegacyDataGenerator
-from .synthetic_data_generator import SyntheticDataGenerator as LegacySyntheticDataGenerator
-from .logging_policy import LoggingPolicyGenerator as LegacyLoggingPolicyGenerator
-from .counterfactual_estimator import CounterfactualValuesEstimator
-from .pipeline import OffPolicyEvaluationPipeline as LegacyOffPolicyEvaluationPipeline
-from .synthetic_pipeline import SyntheticOffPolicyEvaluationPipeline as LegacySyntheticOffPolicyEvaluationPipeline
-from .synthetic_retraining_pipeline import SyntheticRetrainingPipeline as LegacySyntheticRetrainingPipeline
+from .legacy.data_generator import DataGenerator as LegacyDataGenerator
+from .legacy.synthetic_data_generator import SyntheticDataGenerator as LegacySyntheticDataGenerator
+from .legacy.logging_policy import LoggingPolicyGenerator as LegacyLoggingPolicyGenerator
+from .legacy.counterfactual_estimator import CounterfactualValuesEstimator
+from .legacy.pipeline import OffPolicyEvaluationPipeline as LegacyOffPolicyEvaluationPipeline
+from .legacy.synthetic_pipeline import SyntheticOffPolicyEvaluationPipeline as LegacySyntheticOffPolicyEvaluationPipeline
+from .legacy.synthetic_retraining_pipeline import SyntheticRetrainingPipeline as LegacySyntheticRetrainingPipeline
 
 __version__ = "0.2.0"
 __author__ = "Counterfactual Fraud Model Team"
