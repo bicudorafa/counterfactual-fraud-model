@@ -6,7 +6,7 @@ to enable dependency injection, testing, and loose coupling.
 
 import pandas as pd
 import numpy as np
-from typing import Protocol, Dict, Any, runtime_checkable
+from typing import Protocol, Dict, Any, runtime_checkable, Tuple, Optional
 from sklearn.base import BaseEstimator
 
 from .config import (
@@ -14,7 +14,8 @@ from .config import (
     SyntheticDataConfig,
     ModelConfig,
     LoggingPolicyConfig,
-    CounterfactualEstimatorConfig
+    CounterfactualEstimatorConfig,
+    RetrainingModelConfig
 )
 
 
@@ -145,13 +146,20 @@ class PipelineProtocol(Protocol):
 class ModelTrainerProtocol(Protocol):
     """Protocol for model training components."""
     
-    def train_model(self, X: pd.DataFrame, y: pd.Series, config: ModelConfig) -> BaseEstimator:
+    def train_model(
+        self, 
+        X: pd.DataFrame, 
+        y: pd.Series, 
+        config: ModelConfig, 
+        sample_weight: Optional[np.ndarray] = None
+    ) -> BaseEstimator:
         """Train a model on the provided data.
         
         Args:
             X: Feature matrix
             y: Target vector
             config: Model configuration
+            sample_weight: Optional sample weights for training
             
         Returns:
             Trained model instance
@@ -168,5 +176,35 @@ class ModelTrainerProtocol(Protocol):
             
         Returns:
             Dictionary with performance metrics
+        """
+        ...
+
+
+@runtime_checkable  
+class RetrainingDataPreprocessorProtocol(Protocol):
+    """Protocol for retraining data preprocessing strategies."""
+    
+    def prepare_training_data(
+        self, 
+        policy_data: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.Series, Optional[np.ndarray]]:
+        """Prepare training data from policy data using specific strategy.
+        
+        Args:
+            policy_data: Full policy data with features, actions, and propensity scores
+            
+        Returns:
+            Tuple of (features_df, target_series, sample_weights_or_none)
+            - features_df: DataFrame with feature columns ready for training
+            - target_series: Target variable (is_fraud)
+            - sample_weights_or_none: Optional sample weights for training (None for filtering strategies)
+        """
+        ...
+    
+    def get_strategy_info(self) -> Dict[str, Any]:
+        """Get information about the preprocessing strategy used.
+        
+        Returns:
+            Dictionary with strategy details for logging/debugging
         """
         ... 

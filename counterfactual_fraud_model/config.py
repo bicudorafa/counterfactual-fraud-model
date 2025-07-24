@@ -24,6 +24,13 @@ class PropensityType(str, Enum):
     # Future: ADAPTIVE, BAYESIAN, etc.
 
 
+class RetrainingStrategy(str, Enum):
+    """Supported retraining data preprocessing strategies."""
+    
+    FILTERING = "filtering"
+    WEIGHTING = "weighting"
+
+
 class DataGeneratorConfig(BaseModel):
     """Configuration for basic data generation."""
     
@@ -77,6 +84,15 @@ class ModelConfig(BaseModel):
     random_state: Optional[int] = Field(default=None, description="Random seed for model reproducibility")
 
 
+class RetrainingModelConfig(BaseModel):
+    """Configuration for retraining models with data preprocessing strategy."""
+    
+    base_model: ModelConfig = Field(default_factory=ModelConfig, description="Base model configuration")
+    strategy: RetrainingStrategy = Field(default=RetrainingStrategy.FILTERING, description="Data preprocessing strategy")
+    strategy_params: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the preprocessing strategy")
+    classification_threshold: float = Field(default=0.1, ge=0, le=1, description="Threshold for converting scores to binary predictions")
+
+
 class LoggingPolicyConfig(BaseModel):
     """Configuration for logging policy generation."""
     
@@ -122,8 +138,7 @@ class RetrainingConfig(BaseModel):
     """Configuration for model retraining."""
     
     retrain_test_size: float = Field(default=0.5, gt=0, lt=1, description="Fraction of allowed data for testing retrained model")
-    classification_threshold: float = Field(default=0.1, ge=0, le=1, description="Threshold for converting scores to binary predictions")
-    retrain_model: ModelConfig = Field(default_factory=ModelConfig, description="Configuration for retrained model")
+    retrain_model: RetrainingModelConfig = Field(default_factory=RetrainingModelConfig, description="Configuration for retrained model with preprocessing strategy")
 
 
 class SyntheticRetrainingConfig(BaseModel):

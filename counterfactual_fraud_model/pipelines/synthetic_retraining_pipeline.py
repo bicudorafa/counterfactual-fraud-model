@@ -15,9 +15,10 @@ from ..protocols import (
     SyntheticDataGeneratorProtocol,
     LoggingPolicyGeneratorProtocol,
     ModelTrainerProtocol,
+    RetrainingDataPreprocessorProtocol,
     PipelineProtocol
 )
-from ..generators import SyntheticDataGenerator, LoggingPolicyGenerator
+from ..generators import SyntheticDataGenerator, LoggingPolicyGenerator, create_preprocessor
 from ..estimators import CounterfactualEstimator
 from ..core import default_model_trainer
 from .synthetic_off_policy_evaluation_pipeline import SyntheticOffPolicyEvaluationPipeline
@@ -39,7 +40,8 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         self,
         config: SyntheticRetrainingConfig,
         base_pipeline: SyntheticOffPolicyEvaluationPipeline = None,
-        model_trainer: ModelTrainerProtocol = default_model_trainer
+        model_trainer: ModelTrainerProtocol = default_model_trainer,
+        data_preprocessor: RetrainingDataPreprocessorProtocol = None
     ):
         """
         Initialize SyntheticRetrainingPipeline with configuration and dependencies.
@@ -48,6 +50,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             config: Complete configuration for the retraining pipeline
             base_pipeline: Base pipeline for initial data generation (composition instead of inheritance)
             model_trainer: Trainer for retraining models (dependency injection)
+            data_preprocessor: Preprocessor for retraining data (dependency injection)
         """
         self.config = config
         self.model_trainer = model_trainer
@@ -55,10 +58,17 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         # Use provided base pipeline or create default one
         self.base_pipeline = base_pipeline or SyntheticOffPolicyEvaluationPipeline(config.base_config)
         
+        # Use provided preprocessor or create one based on config
+        self.data_preprocessor = data_preprocessor or create_preprocessor(
+            config.retraining.retrain_model.strategy,
+            config.retraining.retrain_model.strategy_params
+        )
+        
         # State for retrained model and metrics
         self._retrained_model: BaseEstimator = None
         self._retrain_performance: Dict[str, float] = None
         self._retrain_dataset_info: Dict[str, Any] = None
+        self._preprocessing_info: Dict[str, Any] = None
     
     def run_pipeline(
         self,
@@ -83,15 +93,26 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             cutoff, exploration_rate
         )
         
-        # Step 2: Retrain model on allowed data
-        allowed_data, test_allowed_data, new_scores, binary_predictions = self._retrain_model(policy_data)
+        # Step 2: Split policy data into train and test
+        train_policy_data, test_policy_data = train_test_split(
+            policy_data,
+            test_size=self.config.retraining.retrain_test_size,
+            random_state=self.config.base_config.synthetic_data.random_state,
+            stratify=policy_data['is_fraud'] if len(policy_data['is_fraud'].unique()) > 1 else None
+        )
         
-        # Step 3: Evaluate retrained model performance
-        ope_metrics_results = self._evaluate_retrained_model(test_allowed_data, binary_predictions)
+        # Step 3: Retrain model on training data
+        preprocessed_train_data = self._retrain_model(train_policy_data)
         
-        # Step 4: Compile final results
+        # Step 4: Evaluate retrained model on test data
+        new_scores, binary_predictions = self._predict_on_test_data(test_policy_data)
+        
+        # Step 5: Evaluate retrained model performance using counterfactual estimation
+        ope_metrics_results = self._evaluate_retrained_model(test_policy_data, binary_predictions)
+        
+        # Step 6: Compile final results
         return self._compile_results(
-            original_results, policy_data, allowed_data, test_allowed_data,
+            original_results, policy_data, preprocessed_train_data, test_policy_data,
             new_scores, binary_predictions, ope_metrics_results,
             cutoff, exploration_rate, include_data
         )
@@ -121,82 +142,84 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         
         return original_results, policy_data
 
-    def _retrain_model(self, policy_data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray]:
+    def _retrain_model(self, train_policy_data: pd.DataFrame) -> pd.DataFrame:
         """
-        Filter policy data to allowed transactions and retrain model.
+        Preprocess training data using strategy and train model.
         
         Args:
-            policy_data: DataFrame containing all policy data
+            train_policy_data: DataFrame containing training policy data
             
         Returns:
-            Tuple of (allowed_data, test_allowed_data, new_scores, binary_predictions)
+            Preprocessed training data
         """
-        # Filter to only allowed transactions (model_action == 'allow')
-        allowed_data = policy_data[policy_data['model_action'] == 'allow'].copy()
+        # Step 1: Use preprocessor to prepare training data
+        X_train, y_train, sample_weights = self.data_preprocessor.prepare_training_data(train_policy_data)
         
-        if len(allowed_data) == 0:
-            raise ValueError("No transactions with model_action == 'allow' found. Cannot retrain model.")
+        # Store preprocessing info for reporting
+        self._preprocessing_info = self.data_preprocessor.get_strategy_info()
         
-        # Prepare features and target for retraining
-        feature_columns = [col for col in allowed_data.columns 
+        # Step 2: Train new model using injected trainer with sample weights
+        self._retrained_model = self.model_trainer.train_model(
+            X_train, y_train, self.config.retraining.retrain_model.base_model, sample_weights
+        )
+        
+        # Step 3: Calculate dataset info based on preprocessed data
+        self._retrain_dataset_info = self._calculate_dataset_info_from_preprocessed(X_train, y_train)
+        
+        # Return preprocessed training data summary
+        return self._create_preprocessed_data_summary(X_train, y_train)
+
+    def _predict_on_test_data(self, test_policy_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Generate predictions on test data using the retrained model.
+        
+        Args:
+            test_policy_data: DataFrame containing test policy data
+            
+        Returns:
+            Tuple of (new_scores, binary_predictions)
+        """
+        # Extract feature columns directly from test data (agnostic to training strategy)
+        feature_columns = [col for col in test_policy_data.columns 
                           if col.startswith('feature_') or col.startswith('x')]
         if len(feature_columns) == 0:
-            raise ValueError("No feature columns found in data. Expected columns starting with 'feature_' or 'x'")
+            raise ValueError("No feature columns found in test data. Expected columns starting with 'feature_' or 'x'")
         
-        X = allowed_data[feature_columns]
-        y = allowed_data['is_fraud']
+        X_test = test_policy_data[feature_columns]
+        y_test = test_policy_data['is_fraud']
         
-        # Split into train/test for retraining
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, 
-            test_size=self.config.retraining.retrain_test_size,
-            random_state=self.config.base_config.synthetic_data.random_state,
-            stratify=y if len(y.unique()) > 1 else None
-        )
-        
-        # Train new model using injected trainer
-        self._retrained_model = self.model_trainer.train_model(
-            X_train, y_train, self.config.retraining.retrain_model
-        )
-        
-        # Calculate retrained model performance
+        # Calculate retrained model performance on test data
         self._retrain_performance = self.model_trainer.calculate_performance(
             self._retrained_model, X_test, y_test
         )
-        
-        # Calculate dataset info
-        self._retrain_dataset_info = self._calculate_dataset_info(allowed_data)
         
         # Generate new model scores on test set
         new_scores = self._retrained_model.predict_proba(X_test)[:, 1]  # Probability of fraud
         
         # Convert to binary predictions using classification threshold
-        binary_predictions = (new_scores > self.config.retraining.classification_threshold).astype(int)
+        binary_predictions = (new_scores > self.config.retraining.retrain_model.classification_threshold).astype(int)
         
-        # Create a subset of allowed_data corresponding to X_test for counterfactual estimation
-        test_indices = X_test.index
-        test_allowed_data = allowed_data.loc[test_indices].copy()
-        
-        return allowed_data, test_allowed_data, new_scores, binary_predictions
+        return new_scores, binary_predictions
 
     def _evaluate_retrained_model(
         self, 
-        test_allowed_data: pd.DataFrame, 
+        test_policy_data: pd.DataFrame, 
         binary_predictions: np.ndarray
     ) -> Dict[str, Any]:
         """
         Evaluate retrained model performance using counterfactual estimation.
         
         Args:
-            test_allowed_data: Test data corresponding to binary predictions
+            test_policy_data: Test policy data for counterfactual estimation
             binary_predictions: Binary predictions from retrained model
             
         Returns:
             Dictionary containing OPE metrics results
         """
+        # Create counterfactual estimator with test data
         estimator = CounterfactualEstimator(
-            self.config.base_config.counterfactual_estimator, 
-            test_allowed_data
+            self.config.base_config.counterfactual_estimator,
+            test_policy_data
         )
         
         # Use the binary predictions directly for counterfactual estimation
@@ -206,8 +229,8 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         self,
         original_results: Dict[str, Any],
         policy_data: pd.DataFrame,
-        allowed_data: pd.DataFrame,
-        test_allowed_data: pd.DataFrame,
+        preprocessed_train_summary: Dict[str, Any],
+        test_policy_data: pd.DataFrame,
         new_scores: np.ndarray,
         binary_predictions: np.ndarray,
         ope_metrics_results: Dict[str, Any],
@@ -221,8 +244,8 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         Args:
             original_results: Results from base pipeline
             policy_data: Original policy data
-            allowed_data: Filtered allowed transactions data
-            test_allowed_data: Test subset of allowed data
+            preprocessed_train_summary: Summary of preprocessed training data
+            test_policy_data: Test policy data 
             new_scores: Predicted scores from retrained model
             binary_predictions: Binary predictions from retrained model
             ope_metrics_results: Counterfactual estimation results
@@ -238,7 +261,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         
         # Calculate summary statistics
         summary_results = self._calculate_summary_statistics(
-            policy_data, allowed_data, test_allowed_data, new_scores, binary_predictions
+            policy_data, preprocessed_train_summary, test_policy_data, new_scores, binary_predictions
         )
         
         # Compile parameters used in this run
@@ -260,12 +283,15 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             'retrained_model_performance': self._retrain_performance,
             'original_dataset_info': original_results['dataset_info'],
             'retrained_dataset_info': self._retrain_dataset_info,
+            'preprocessing_info': self._preprocessing_info,
+            'preprocessed_train_summary': preprocessed_train_summary,
             'parameters': run_parameters
         }
         
         if include_data_flag:
             results['original_data'] = policy_data
-            results['retrained_data'] = test_allowed_data
+            results['preprocessed_train_summary'] = preprocessed_train_summary
+            results['test_data'] = test_policy_data
             results['new_scores'] = new_scores
             results['binary_predictions'] = binary_predictions
             
@@ -287,28 +313,40 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             raise ValueError("Pipeline must be run before accessing retrained dataset info")
         return self._retrain_dataset_info.copy()
     
-    def _calculate_dataset_info(self, allowed_data: pd.DataFrame) -> Dict[str, Any]:
-        """Calculate information about the retrained dataset."""
+    def _calculate_dataset_info_from_preprocessed(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
+        """Calculate information about the preprocessed dataset."""
         return {
-            'n_samples': len(allowed_data),
-            'n_features': len([col for col in allowed_data.columns 
-                               if col.startswith('feature_') or col.startswith('x')]),
-            'fraud_rate': allowed_data['is_fraud'].mean(),
-            'n_fraud': allowed_data['is_fraud'].sum(),
-            'n_legitimate': (allowed_data['is_fraud'] == 0).sum()
+            'n_samples': len(X),
+            'n_features': len(X.columns),
+            'fraud_rate': y.mean(),
+            'n_fraud': y.sum(),
+            'n_legitimate': (y == 0).sum(),
+            'preprocessing_strategy': self._preprocessing_info.get('strategy', 'unknown') if self._preprocessing_info else 'unknown'
+        }
+    
+    def _create_preprocessed_data_summary(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
+        """Create a summary of the preprocessed training data."""
+        return {
+            'n_samples': len(X),
+            'n_features': len(X.columns),
+            'feature_names': list(X.columns),
+            'fraud_rate': y.mean(),
+            'n_fraud': y.sum(),
+            'n_legitimate': (y == 0).sum(),
+            'class_distribution': y.value_counts().to_dict()
         }
     
     def _calculate_summary_statistics(
         self, 
         policy_data: pd.DataFrame,
-        allowed_data: pd.DataFrame,
-        test_allowed_data: pd.DataFrame,
+        preprocessed_train_summary: Dict[str, Any],
+        test_policy_data: pd.DataFrame,
         new_scores: np.ndarray,
         binary_predictions: np.ndarray
     ) -> Dict[str, Any]:
         """Calculate comprehensive summary statistics for the retraining pipeline."""
         total_transactions = len(policy_data)
-        total_allowed = len(allowed_data)
+        total_preprocessed_for_training = preprocessed_train_summary['n_samples']
         
         # Original model performance on policy data
         original_approval_rate = (policy_data['model_action'] == 'allow').mean()
@@ -320,19 +358,20 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         new_allow_rate = 1 - new_block_rate
         
         # Calculate fraud rate for new model's allowed transactions
-        # Use test_allowed_data which corresponds to binary_predictions
-        allowed_by_new_model = test_allowed_data[binary_predictions == 0]  # 0 means allow
-        new_model_fraud_rate = allowed_by_new_model['is_fraud'].mean() if len(allowed_by_new_model) > 0 else 0.0
+        # Note: binary_predictions correspond to test_policy_data rows
+        allowed_by_new_model_mask = binary_predictions == 0  # 0 means allow
+        new_model_fraud_rate = test_policy_data['is_fraud'][allowed_by_new_model_mask].mean() if allowed_by_new_model_mask.sum() > 0 else 0.0
         
         return {
             'statistics': {
                 'total_transactions': total_transactions,
-                'total_allowed_for_retraining': total_allowed,
+                'total_preprocessed_for_training': total_preprocessed_for_training,
                 'original_approval_rate': original_approval_rate,
                 'original_fraud_rate': original_fraud_rate,
                 'new_model_block_rate': new_block_rate,
                 'new_model_allow_rate': new_allow_rate,
                 'new_model_fraud_rate': new_model_fraud_rate,
-                'classification_threshold': self.config.retraining.classification_threshold
+                'classification_threshold': self.config.retraining.retrain_model.classification_threshold,
+                'preprocessing_strategy': self._preprocessing_info.get('strategy', 'unknown') if self._preprocessing_info else 'unknown'
             }
         } 
