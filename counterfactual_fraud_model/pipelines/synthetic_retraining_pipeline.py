@@ -6,7 +6,7 @@ functionality. Uses composition and dependency injection for loose coupling.
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 from sklearn.model_selection import train_test_split
 from sklearn.base import BaseEstimator
 
@@ -78,10 +78,40 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             Dictionary containing statistics, metrics, parameters, model performance, 
             dataset info, and optionally data for both original and retrained models
         """
-        # Use provided parameters or fall back to config
-        include_data_flag = include_data if include_data is not None else self.config.base_config.pipeline.include_data
+        # Step 1: Generate logging policy data
+        original_results, policy_data = self._generate_logging_policy_data(
+            cutoff, exploration_rate
+        )
         
-        # Step 1: Run base pipeline to get policy data
+        # Step 2: Retrain model on allowed data
+        allowed_data, test_allowed_data, new_scores, binary_predictions = self._retrain_model(policy_data)
+        
+        # Step 3: Evaluate retrained model performance
+        ope_metrics_results = self._evaluate_retrained_model(test_allowed_data, binary_predictions)
+        
+        # Step 4: Compile final results
+        return self._compile_results(
+            original_results, policy_data, allowed_data, test_allowed_data,
+            new_scores, binary_predictions, ope_metrics_results,
+            cutoff, exploration_rate, include_data
+        )
+
+    def _generate_logging_policy_data(
+        self, 
+        cutoff: float = None, 
+        exploration_rate: float = None
+    ) -> Tuple[Dict[str, Any], pd.DataFrame]:
+        """
+        Generate logging policy data using the base pipeline.
+        
+        Args:
+            cutoff: Score threshold for the original logging policy
+            exploration_rate: Rate of exploration for blocked transactions
+            
+        Returns:
+            Tuple of (original_results, policy_data)
+        """
+        # Run base pipeline to get policy data
         original_results = self.base_pipeline.run_pipeline(
             cutoff=cutoff,
             exploration_rate=exploration_rate,
@@ -89,13 +119,25 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         )
         policy_data = original_results['data']
         
-        # Step 2: Filter to only allowed transactions (model_action == 'allow')
+        return original_results, policy_data
+
+    def _retrain_model(self, policy_data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray]:
+        """
+        Filter policy data to allowed transactions and retrain model.
+        
+        Args:
+            policy_data: DataFrame containing all policy data
+            
+        Returns:
+            Tuple of (allowed_data, test_allowed_data, new_scores, binary_predictions)
+        """
+        # Filter to only allowed transactions (model_action == 'allow')
         allowed_data = policy_data[policy_data['model_action'] == 'allow'].copy()
         
         if len(allowed_data) == 0:
             raise ValueError("No transactions with model_action == 'allow' found. Cannot retrain model.")
         
-        # Step 3: Prepare features and target for retraining
+        # Prepare features and target for retraining
         feature_columns = [col for col in allowed_data.columns 
                           if col.startswith('feature_') or col.startswith('x')]
         if len(feature_columns) == 0:
@@ -104,7 +146,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         X = allowed_data[feature_columns]
         y = allowed_data['is_fraud']
         
-        # Step 4: Split into train/test for retraining
+        # Split into train/test for retraining
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, 
             test_size=self.config.retraining.retrain_test_size,
@@ -112,44 +154,94 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             stratify=y if len(y.unique()) > 1 else None
         )
         
-        # Step 5: Train new model using injected trainer
+        # Train new model using injected trainer
         self._retrained_model = self.model_trainer.train_model(
             X_train, y_train, self.config.retraining.retrain_model
         )
         
-        # Step 6: Calculate retrained model performance
+        # Calculate retrained model performance
         self._retrain_performance = self.model_trainer.calculate_performance(
             self._retrained_model, X_test, y_test
         )
         
-        # Step 7: Calculate dataset info
+        # Calculate dataset info
         self._retrain_dataset_info = self._calculate_dataset_info(allowed_data)
         
-        # Step 8: Generate new model scores on test set
+        # Generate new model scores on test set
         new_scores = self._retrained_model.predict_proba(X_test)[:, 1]  # Probability of fraud
         
-        # Step 9: Convert to binary predictions using classification threshold
+        # Convert to binary predictions using classification threshold
         binary_predictions = (new_scores > self.config.retraining.classification_threshold).astype(int)
         
-        # Step 10: Use CounterfactualEstimator with binary predictions
         # Create a subset of allowed_data corresponding to X_test for counterfactual estimation
         test_indices = X_test.index
         test_allowed_data = allowed_data.loc[test_indices].copy()
         
+        return allowed_data, test_allowed_data, new_scores, binary_predictions
+
+    def _evaluate_retrained_model(
+        self, 
+        test_allowed_data: pd.DataFrame, 
+        binary_predictions: np.ndarray
+    ) -> Dict[str, Any]:
+        """
+        Evaluate retrained model performance using counterfactual estimation.
+        
+        Args:
+            test_allowed_data: Test data corresponding to binary predictions
+            binary_predictions: Binary predictions from retrained model
+            
+        Returns:
+            Dictionary containing OPE metrics results
+        """
         estimator = CounterfactualEstimator(
             self.config.base_config.counterfactual_estimator, 
             test_allowed_data
         )
         
         # Use the binary predictions directly for counterfactual estimation
-        ope_metrics_results = estimator.estimate_ope_metrics(binary_predictions)
+        return estimator.estimate_ope_metrics(binary_predictions)
+
+    def _compile_results(
+        self,
+        original_results: Dict[str, Any],
+        policy_data: pd.DataFrame,
+        allowed_data: pd.DataFrame,
+        test_allowed_data: pd.DataFrame,
+        new_scores: np.ndarray,
+        binary_predictions: np.ndarray,
+        ope_metrics_results: Dict[str, Any],
+        cutoff: float = None,
+        exploration_rate: float = None,
+        include_data: bool = None
+    ) -> Dict[str, Any]:
+        """
+        Compile final results from all pipeline steps.
         
-        # Step 11: Calculate summary statistics
+        Args:
+            original_results: Results from base pipeline
+            policy_data: Original policy data
+            allowed_data: Filtered allowed transactions data
+            test_allowed_data: Test subset of allowed data
+            new_scores: Predicted scores from retrained model
+            binary_predictions: Binary predictions from retrained model
+            ope_metrics_results: Counterfactual estimation results
+            cutoff: Runtime override for cutoff
+            exploration_rate: Runtime override for exploration rate
+            include_data: Runtime override for include_data flag
+            
+        Returns:
+            Complete results dictionary
+        """
+        # Use provided parameters or fall back to config
+        include_data_flag = include_data if include_data is not None else self.config.base_config.pipeline.include_data
+        
+        # Calculate summary statistics
         summary_results = self._calculate_summary_statistics(
             policy_data, allowed_data, test_allowed_data, new_scores, binary_predictions
         )
         
-        # Step 12: Compile parameters used in this run
+        # Compile parameters used in this run
         run_parameters = {
             'base_config': self.config.base_config.model_dump(),
             'retraining': self.config.retraining.model_dump(),
@@ -160,7 +252,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             }
         }
         
-        # Step 13: Compile results
+        # Compile results
         results = {
             **summary_results,
             'ope_metrics': ope_metrics_results,

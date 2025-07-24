@@ -31,7 +31,7 @@ class DataGeneratorConfig(BaseModel):
     beta_param: float = Field(default=2.0, gt=0, description="Beta parameter for beta distribution") 
     mean: float = Field(default=-0.5, description="Mean for normal error distribution")
     sd: float = Field(default=0.5, gt=0, description="Standard deviation for normal error distribution")
-    sample_size: int = Field(default=100_000, gt=0, description="Number of samples to generate")
+    sample_size: int = Field(default=10_000, gt=0, description="Number of samples to generate")
     random_state: Optional[int] = Field(default=None, description="Random seed for reproducibility")
 
 
@@ -47,7 +47,7 @@ class SyntheticDataConfig(BaseModel):
     weights: List[float] = Field(default=[0.985, 0.015], description="Class balance weights")
     flip_y: float = Field(default=0.01, ge=0, le=1, description="Fraction of samples with flipped class")
     class_sep: float = Field(default=1.0, gt=0, description="Factor multiplying the hypercube size")
-    test_size: float = Field(default=0.3, gt=0, lt=1, description="Fraction of data for testing")
+    test_size: float = Field(default=0.5, gt=0, lt=1, description="Fraction of data for testing")
     random_state: Optional[int] = Field(default=None, description="Random seed for reproducibility")
     
     @field_validator('n_informative')
@@ -80,7 +80,7 @@ class ModelConfig(BaseModel):
 class LoggingPolicyConfig(BaseModel):
     """Configuration for logging policy generation."""
     
-    cutoff: float = Field(default=0.05, ge=0, le=1, description="Score threshold for blocking transactions")
+    cutoff: float = Field(default=0.1, ge=0, le=1, description="Score threshold for blocking transactions")
     exploration_rate: float = Field(default=0.05, ge=0, le=1, description="Rate of exploration for blocked transactions")
     propensity_type: PropensityType = Field(default=PropensityType.UNIFORM, description="Type of propensity function")
     random_state: Optional[int] = Field(default=None, description="Random seed for reproducibility")
@@ -121,8 +121,8 @@ class SyntheticOffPolicyEvaluationConfig(BaseModel):
 class RetrainingConfig(BaseModel):
     """Configuration for model retraining."""
     
-    retrain_test_size: float = Field(default=0.3, gt=0, lt=1, description="Fraction of allowed data for testing retrained model")
-    classification_threshold: float = Field(default=0.05, ge=0, le=1, description="Threshold for converting scores to binary predictions")
+    retrain_test_size: float = Field(default=0.5, gt=0, lt=1, description="Fraction of allowed data for testing retrained model")
+    classification_threshold: float = Field(default=0.1, ge=0, le=1, description="Threshold for converting scores to binary predictions")
     retrain_model: ModelConfig = Field(default_factory=ModelConfig, description="Configuration for retrained model")
 
 
