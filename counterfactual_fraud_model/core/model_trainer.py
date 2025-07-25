@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Optional
 from sklearn.base import BaseEstimator
-from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score, average_precision_score
 
 from ..config import ModelConfig
 from ..protocols import ModelTrainerProtocol, ModelFactoryProtocol
@@ -59,28 +59,42 @@ class ModelTrainer(ModelTrainerProtocol):
         
         return model
     
-    def calculate_performance(self, model: BaseEstimator, X: pd.DataFrame, y: pd.Series) -> Dict[str, float]:
+    def calculate_performance(
+        self, 
+        model: BaseEstimator, 
+        X: pd.DataFrame, 
+        y: pd.Series, 
+        threshold: Optional[float] = None
+    ) -> Dict[str, float]:
         """Calculate performance metrics for a model.
         
         Args:
             model: Trained model
             X: Feature matrix for evaluation
             y: Target vector for evaluation
+            threshold: Optional threshold for binary classification. If provided, 
+                      uses probabilities >= threshold as positive predictions.
+                      If None, uses model's default predict() method.
             
         Returns:
             Dictionary with performance metrics
         """
-        # Get predictions and probabilities
-        y_pred = model.predict(X)
+        # Get probabilities
         y_pred_proba = model.predict_proba(X)[:, 1]  # Probability of positive class
+        
+        # Get binary predictions based on threshold or model default
+        if threshold is not None:
+            y_pred = (y_pred_proba >= threshold).astype(int)
+        else:
+            y_pred = model.predict(X)
         
         # Calculate metrics with zero_division handling
         performance = {
-            'accuracy': accuracy_score(y, y_pred),
             'precision': precision_score(y, y_pred, zero_division=0),
             'recall': recall_score(y, y_pred, zero_division=0),
             'f1': f1_score(y, y_pred, zero_division=0),
-            'roc_auc': roc_auc_score(y, y_pred_proba)
+            'roc_auc': roc_auc_score(y, y_pred_proba),  # ROC-AUC uses probabilities, not binary predictions
+            'average_precision': average_precision_score(y, y_pred_proba)  # Average Precision uses probabilities
         }
         
         return performance

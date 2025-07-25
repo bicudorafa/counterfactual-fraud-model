@@ -47,7 +47,6 @@ class SyntheticDataGenerator(SyntheticDataGeneratorProtocol):
         self._model: Optional[BaseEstimator] = None
         self._train_data: Optional[pd.DataFrame] = None
         self._test_data: Optional[pd.DataFrame] = None
-        self._model_performance: Optional[Dict[str, float]] = None
         self._dataset_info: Optional[Dict[str, Any]] = None
     
     def generate_data(self) -> pd.DataFrame:
@@ -96,18 +95,11 @@ class SyntheticDataGenerator(SyntheticDataGeneratorProtocol):
         
         self._model = self.model_trainer.train_model(X_train_df, y_train_series, self.model_config)
         
-        # Calculate performance
-        X_test_df = test_df[feature_columns]
-        y_test_series = test_df['is_fraud']
-        self._model_performance = self.model_trainer.calculate_performance(
-            self._model, X_test_df, y_test_series
-        )
-        
         # Calculate dataset info
         self._dataset_info = self._calculate_dataset_info(y)
         
         # Get predictions on TEST dataset only
-        test_model_scores = self._model.predict_proba(X_test_df)[:, 1]  # Probability of fraud class
+        test_model_scores = self._model.predict_proba(test_df[feature_columns])[:, 1]  # Probability of fraud class
         
         # Return entire test dataset with all features + is_fraud + model_scores
         result = self._test_data.copy()
@@ -118,11 +110,20 @@ class SyntheticDataGenerator(SyntheticDataGeneratorProtocol):
         """Get the current data configuration."""
         return self.data_config
     
-    def get_model_performance(self) -> Dict[str, float]:
-        """Get performance metrics of the trained model."""
-        if self._model_performance is None:
+    def get_model(self) -> BaseEstimator:
+        """Get the trained model.
+        
+        Returns:
+            The trained machine learning model
+            
+        Raises:
+            ValueError: If model has not been trained yet
+        """
+        if self._model is None:
             raise ValueError("Model has not been trained yet. Call generate_data() first.")
-        return self._model_performance.copy()
+        return self._model
+    
+
     
     def get_dataset_info(self) -> Dict[str, Any]:
         """Get information about the generated dataset."""

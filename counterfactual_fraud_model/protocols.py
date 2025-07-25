@@ -52,8 +52,8 @@ class SyntheticDataGeneratorProtocol(Protocol):
         """Get the current configuration."""
         ...
     
-    def get_model_performance(self) -> Dict[str, float]:
-        """Get performance metrics of the trained model."""
+    def get_model(self) -> BaseEstimator:
+        """Get the trained model."""
         ...
     
     def get_dataset_info(self) -> Dict[str, Any]:
@@ -166,13 +166,22 @@ class ModelTrainerProtocol(Protocol):
         """
         ...
     
-    def calculate_performance(self, model: BaseEstimator, X: pd.DataFrame, y: pd.Series) -> Dict[str, float]:
+    def calculate_performance(
+        self, 
+        model: BaseEstimator, 
+        X: pd.DataFrame, 
+        y: pd.Series, 
+        threshold: Optional[float] = None
+    ) -> Dict[str, float]:
         """Calculate performance metrics for a model.
         
         Args:
             model: Trained model
             X: Feature matrix for evaluation
             y: Target vector for evaluation
+            threshold: Optional threshold for binary classification. If provided, 
+                      uses probabilities >= threshold as positive predictions.
+                      If None, uses model's default predict() method.
             
         Returns:
             Dictionary with performance metrics

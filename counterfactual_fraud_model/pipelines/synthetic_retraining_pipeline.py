@@ -137,10 +137,13 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             exploration_rate=exploration_rate
         )
         
+        # Build policy config to get the actual cutoff being used
+        policy_config = self.base_pipeline._build_policy_config(cutoff, exploration_rate)
+        
         # Create minimal original_results structure with the information we need
         # This ensures compatibility with the rest of the pipeline
         original_results = {
-            'model_performance': self.base_pipeline.get_model_performance(),
+            'model_performance': self.base_pipeline.get_model_performance(policy_data, policy_config.cutoff),
             'dataset_info': self.base_pipeline.get_dataset_info()
         }
         

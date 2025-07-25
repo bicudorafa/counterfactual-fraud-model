@@ -118,11 +118,11 @@ class SyntheticOffPolicyEvaluationPipeline(PipelineProtocol):
         summary_results = self._calculate_summary_statistics(policy_data)
         
         # Step 5: Get additional information about model and dataset
-        model_performance = self.get_model_performance()
+        policy_config = self._build_policy_config(cutoff, exploration_rate)
+        model_performance = self.get_model_performance(policy_data, policy_config.cutoff)
         dataset_info = self.get_dataset_info()
         
         # Step 6: Compile parameters used in this run
-        policy_config = self._build_policy_config(cutoff, exploration_rate)
         run_parameters = {
             'synthetic_data': self.synthetic_data_generator.get_config().model_dump(),
             'model': self.config.model.model_dump(),
@@ -149,9 +149,28 @@ class SyntheticOffPolicyEvaluationPipeline(PipelineProtocol):
         """Get the current configuration."""
         return self.config
     
-    def get_model_performance(self) -> Dict[str, float]:
-        """Get performance metrics of the trained model."""
-        return self.synthetic_data_generator.get_model_performance()
+    def get_model_performance(self, policy_data: pd.DataFrame, cutoff: float) -> Dict[str, float]:
+        """Get performance metrics of the trained model using the specified cutoff threshold.
+        
+        Args:
+            policy_data: DataFrame containing model scores and true fraud labels
+            cutoff: Score threshold for classification (scores >= cutoff are predicted as fraud)
+            
+        Returns:
+            Dictionary with performance metrics calculated using the cutoff threshold
+        """
+        # Get the trained model from the data generator
+        model = self.synthetic_data_generator.get_model()
+        
+        # Extract features and true labels from policy data
+        feature_columns = [col for col in policy_data.columns if col.startswith('feature_')]
+        X = policy_data[feature_columns]
+        y_true = policy_data['is_fraud']
+        
+        # Use the ModelTrainer's calculate_performance method with the specified threshold
+        return self.synthetic_data_generator.model_trainer.calculate_performance(
+            model, X, y_true, threshold=cutoff
+        )
     
     def get_dataset_info(self) -> Dict[str, Any]:
         """Get information about the generated dataset."""
