@@ -25,6 +25,7 @@ from counterfactual_fraud_model import (
 
 def run_simulations(exploration_rates: np.ndarray, 
                    cutoff: float = 0.05,
+                   sample_size: int = 20_000,
                    random_state: int = 42) -> tuple[List[Dict[str, Any]], pd.DataFrame]:
     """
     Run multiple OffPolicyEvaluationPipeline simulations with different exploration rates.
@@ -43,7 +44,7 @@ def run_simulations(exploration_rates: np.ndarray,
     config = OffPolicyEvaluationConfig(
         data_generator=DataGeneratorConfig(
             # HACK: erase later
-            sample_size=20_000,
+            sample_size=sample_size,
             random_state=random_state
         ),
         logging_policy=LoggingPolicyConfig(
@@ -181,12 +182,18 @@ def create_policy_metrics_table(results: List[Dict[str, Any]]) -> pd.DataFrame:
 
 
 def plot_ope_metrics(results: List[Dict[str, Any]]) -> None:
-    """Plot OPE metrics vs exploration rate with confidence intervals."""
+    """Plot OPE metrics vs exploration rate with confidence intervals and model baselines."""
     # Extract exploration rates
     exploration_rates = [result['parameters']['exploration_rate'] for result in results]
     
     # Get all available metrics from first result
     metrics = list(results[0]['ope_metrics'].keys())
+    
+    # Get model metrics (same for all results)
+    model_metrics = results[0]['model']
+
+    # Get fraud rate from statistics (same for all results)
+    model_metrics['fraud_rate'] = results[0]['statistics']['fraud_rate_overall']
     
     # Create subplots
     n_metrics = len(metrics)
@@ -207,10 +214,15 @@ def plot_ope_metrics(results: List[Dict[str, Any]]) -> None:
         ci_upper = [result['ope_metrics'][metric]['p975'] for result in results]
         
         # Plot estimate line
-        ax.plot(exploration_rates, estimates, 'o-', linewidth=2, markersize=6, label='Estimate')
+        ax.plot(exploration_rates, estimates, 'o-', linewidth=2, markersize=6, label='OPE Estimate')
         
         # Plot confidence interval
         ax.fill_between(exploration_rates, ci_lower, ci_upper, alpha=0.3, label='95% CI')
+        
+        # Plot model baseline if available
+        if metric in model_metrics:
+            model_value = model_metrics[metric]
+            ax.axhline(y=model_value, color='red', linestyle='--', linewidth=2, label='Real Value')
         
         ax.set_xlabel('Exploration Rate')
         ax.set_ylabel(metric.replace('_', ' ').title())
