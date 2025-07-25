@@ -12,6 +12,7 @@ Performance optimizations:
 import numpy as np
 import pandas as pd
 from typing import Dict, List
+from sklearn.metrics import average_precision_score
 
 from ..config import CounterfactualEstimatorConfig
 from ..protocols import CounterfactualEstimatorProtocol
@@ -61,8 +62,10 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         self.available_metrics = {
             'precision': self._weighted_precision,
             'recall': self._weighted_recall,
-            'f1': self._weighted_f1,
-            'fraud_rate': self._weighted_fraud_rate
+            # Stop using f1 for now, it isn't that informative for the simulations
+            # 'f1': self._weighted_f1,
+            'fraud_rate': self._weighted_fraud_rate,
+            'average_precision': self._weighted_average_precision
         }
         
         # Set random seed for reproducibility
@@ -74,6 +77,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         self.is_fraud_array = self.observed_data['is_fraud'].values
         self.propensity_scores_array = self.observed_data['propensity_score'].values
         self.model_action_array = self.observed_data['model_action'].values
+        self.model_scores_array = self.observed_data['model_scores'].values
         self.n_observed = len(self.observed_data)
         
         # Pre-compute importance sampling weights
@@ -258,4 +262,36 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         weighted_fraud = np.sum(allowed_is_fraud * allowed_weights)
         weighted_total = np.sum(allowed_weights)
         
-        return weighted_fraud / weighted_total 
+        return weighted_fraud / weighted_total
+    
+    def _weighted_average_precision(self, new_actions: np.ndarray, weights: np.ndarray) -> float:
+        """
+        Calculate weighted average precision using sklearn's average_precision_score.
+        
+        Average precision summarizes a precision-recall curve as the weighted mean of 
+        precisions achieved at each threshold, with the increase in recall from the 
+        previous threshold used as the weight.
+        
+        Args:
+            new_actions: Array of new policy actions (0=allow, 1=block) - not used for AP calculation
+            weights: Bootstrap weights (importance_weights * poisson_weights)
+            
+        Returns:
+            Average precision score
+        """
+        # Check if we have any positive weights
+        if np.sum(weights) == 0:
+            return 0.0
+        
+        # Check if we have any fraud cases
+        if not self.is_fraud_array.any():
+            return 0.0
+        
+        # Calculate average precision using model scores and true fraud labels
+        # sklearn handles weight scaling internally, so no normalization needed
+        ap_score = average_precision_score(
+            y_true=self.is_fraud_array,
+            y_score=self.model_scores_array,
+            sample_weight=weights
+        )
+        return ap_score 
