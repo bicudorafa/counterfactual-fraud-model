@@ -7,8 +7,6 @@ and noise generation. Configured via Pydantic models for type safety.
 import numpy as np
 import pandas as pd
 from scipy.stats import beta
-from typing import Dict, Optional
-from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score, average_precision_score
 
 from ..config import DataGeneratorConfig
 from ..protocols import DataGeneratorProtocol
@@ -30,7 +28,6 @@ class DataGenerator(DataGeneratorProtocol):
             config: Configuration object containing all generation parameters
         """
         self.config = config
-        self._model_performance: Optional[Dict[str, float]] = None
         
         # Set random seed if provided
         if config.random_state is not None:
@@ -69,42 +66,8 @@ class DataGenerator(DataGeneratorProtocol):
             'is_fraud': fraud
         })
         
-        # Calculate and store performance metrics
-        self._model_performance = self._calculate_performance(data)
-        
         return data
     
     def get_config(self) -> DataGeneratorConfig:
         """Get the current configuration."""
-        return self.config
-    
-    def get_model_performance(self) -> Dict[str, float]:
-        """Get performance metrics of the generated model scores."""
-        if self._model_performance is None:
-            raise ValueError("Data has not been generated yet. Call generate_data() first.")
-        return self._model_performance.copy()
-    
-    def _calculate_performance(self, data: pd.DataFrame, threshold: float = 0.5) -> Dict[str, float]:
-        """Calculate performance metrics from generated data.
-        
-        Args:
-            data: DataFrame with model_scores and is_fraud columns
-            threshold: Threshold for converting probabilities to binary predictions
-            
-        Returns:
-            Dictionary with performance metrics
-        """
-        y_true = data['is_fraud']
-        y_pred_proba = data['model_scores']
-        y_pred = (y_pred_proba >= threshold).astype(int)
-        
-        # Calculate metrics with zero_division handling
-        performance = {
-            'precision': precision_score(y_true, y_pred, zero_division=0),
-            'recall': recall_score(y_true, y_pred, zero_division=0),
-            'f1': f1_score(y_true, y_pred, zero_division=0),
-            'roc_auc': roc_auc_score(y_true, y_pred_proba),
-            'average_precision': average_precision_score(y_true, y_pred_proba)
-        }
-        
-        return performance 
+        return self.config 
