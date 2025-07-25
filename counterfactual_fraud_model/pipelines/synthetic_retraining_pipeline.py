@@ -89,6 +89,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             dataset info, and optionally data for both original and retrained models
         """
         # Step 1: Generate logging policy data
+        # TODO: currently, this method run the whole base_pipeline.run_pipeline. Think how to avoid that
         original_results, policy_data = self._generate_logging_policy_data(
             cutoff, exploration_rate
         )
@@ -112,9 +113,8 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         
         # Step 6: Compile final results
         return self._compile_results(
-            original_results, policy_data, preprocessed_train_data, test_policy_data,
-            new_scores, binary_predictions, ope_metrics_results,
-            cutoff, exploration_rate, include_data
+            original_results, 
+            ope_metrics_results
         )
 
     def _generate_logging_policy_data(
@@ -211,7 +211,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         
         Args:
             test_policy_data: Test policy data for counterfactual estimation
-            binary_predictions: Binary predictions from retrained model
+            binary_predictions: Binary predictions from retrained model (for all test transactions)
             
         Returns:
             Dictionary containing OPE metrics results
@@ -222,78 +222,34 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             test_policy_data
         )
         
-        # Use the binary predictions directly for counterfactual estimation
-        return estimator.estimate_ope_metrics(binary_predictions)
+        # Filter binary predictions to only allowed transactions (same filtering as estimator does internally)
+        allowed_mask = test_policy_data['policy_action'] == 'allow'
+        allowed_predictions = binary_predictions[allowed_mask]
+        
+        # Use the filtered predictions for counterfactual estimation
+        return estimator.estimate_ope_metrics(allowed_predictions)
 
     def _compile_results(
         self,
         original_results: Dict[str, Any],
-        policy_data: pd.DataFrame,
-        preprocessed_train_summary: Dict[str, Any],
-        test_policy_data: pd.DataFrame,
-        new_scores: np.ndarray,
-        binary_predictions: np.ndarray,
-        ope_metrics_results: Dict[str, Any],
-        cutoff: float = None,
-        exploration_rate: float = None,
-        include_data: bool = None
+        ope_metrics_results: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Compile final results from all pipeline steps.
         
         Args:
             original_results: Results from base pipeline
-            policy_data: Original policy data
-            preprocessed_train_summary: Summary of preprocessed training data
-            test_policy_data: Test policy data 
-            new_scores: Predicted scores from retrained model
-            binary_predictions: Binary predictions from retrained model
             ope_metrics_results: Counterfactual estimation results
-            cutoff: Runtime override for cutoff
-            exploration_rate: Runtime override for exploration rate
-            include_data: Runtime override for include_data flag
             
         Returns:
-            Complete results dictionary
+            Simplified results dictionary with only key information
         """
-        # Use provided parameters or fall back to config
-        include_data_flag = include_data if include_data is not None else self.config.base_config.pipeline.include_data
-        
-        # Calculate summary statistics
-        summary_results = self._calculate_summary_statistics(
-            policy_data, preprocessed_train_summary, test_policy_data, new_scores, binary_predictions
-        )
-        
-        # Compile parameters used in this run
-        run_parameters = {
-            'base_config': self.config.base_config.model_dump(),
-            'retraining': self.config.retraining.model_dump(),
-            'runtime_overrides': {
-                'cutoff': cutoff,
-                'exploration_rate': exploration_rate,
-                'include_data': include_data_flag
-            }
-        }
-        
-        # Compile results
+        # Compile results with only the three key pieces of information
         results = {
-            **summary_results,
-            'ope_metrics': ope_metrics_results,
-            'original_model_performance': original_results['model_performance'],
+            'original_results': original_results,
             'retrained_model_performance': self._retrain_performance,
-            'original_dataset_info': original_results['dataset_info'],
-            'retrained_dataset_info': self._retrain_dataset_info,
-            'preprocessing_info': self._preprocessing_info,
-            'preprocessed_train_summary': preprocessed_train_summary,
-            'parameters': run_parameters
+            'ope_metrics': ope_metrics_results
         }
-        
-        if include_data_flag:
-            results['original_data'] = policy_data
-            results['preprocessed_train_summary'] = preprocessed_train_summary
-            results['test_data'] = test_policy_data
-            results['new_scores'] = new_scores
-            results['binary_predictions'] = binary_predictions
             
         return results
     
