@@ -51,6 +51,41 @@ class SyntheticOffPolicyEvaluationPipeline(PipelineProtocol):
         # Cache for generated data
         self._generated_data: pd.DataFrame = None
     
+    def generate_policy_data(
+        self,
+        cutoff: float = None,
+        exploration_rate: float = None
+    ) -> pd.DataFrame:
+        """
+        Generate policy data by applying logging policy to synthetic data.
+        
+        This method performs Steps 1-2 of the pipeline:
+        1. Generate synthetic data with trained model scores
+        2. Apply logging policy to create policy actions
+        
+        Args:
+            cutoff: Score threshold for the logging policy (overrides config if provided)
+            exploration_rate: Rate of exploration for blocked transactions (overrides config if provided)
+            
+        Returns:
+            DataFrame containing synthetic data with policy actions applied
+        """
+        # Use provided parameters or fall back to config
+        policy_config = self._build_policy_config(cutoff, exploration_rate)
+        
+        # Step 1: Generate synthetic data with trained model scores
+        data = self._get_or_generate_data()
+        
+        # Step 2: Apply logging policy (create new generator if params changed)
+        if policy_config != self.logging_policy_generator.get_config():
+            policy_generator = LoggingPolicyGenerator(policy_config)
+        else:
+            policy_generator = self.logging_policy_generator
+        
+        policy_data = policy_generator.generate_policy(data)
+        
+        return policy_data
+    
     def run_pipeline(
         self,
         cutoff: float = None,
@@ -70,19 +105,10 @@ class SyntheticOffPolicyEvaluationPipeline(PipelineProtocol):
             dataset info, and optionally data
         """
         # Use provided parameters or fall back to config
-        policy_config = self._build_policy_config(cutoff, exploration_rate)
         include_data_flag = include_data if include_data is not None else self.config.pipeline.include_data
         
-        # Step 1: Generate synthetic data with trained model scores
-        data = self._get_or_generate_data()
-        
-        # Step 2: Apply logging policy (create new generator if params changed)
-        if policy_config != self.logging_policy_generator.get_config():
-            policy_generator = LoggingPolicyGenerator(policy_config)
-        else:
-            policy_generator = self.logging_policy_generator
-        
-        policy_data = policy_generator.generate_policy(data)
+        # Steps 1-2: Generate policy data
+        policy_data = self.generate_policy_data(cutoff, exploration_rate)
         
         # Step 3: Create counterfactual estimator and estimate metrics
         estimator = CounterfactualEstimator(self.config.counterfactual_estimator, policy_data)
@@ -96,6 +122,7 @@ class SyntheticOffPolicyEvaluationPipeline(PipelineProtocol):
         dataset_info = self.get_dataset_info()
         
         # Step 6: Compile parameters used in this run
+        policy_config = self._build_policy_config(cutoff, exploration_rate)
         run_parameters = {
             'synthetic_data': self.synthetic_data_generator.get_config().model_dump(),
             'model': self.config.model.model_dump(),

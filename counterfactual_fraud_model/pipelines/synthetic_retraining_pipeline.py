@@ -89,7 +89,6 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             dataset info, and optionally data for both original and retrained models
         """
         # Step 1: Generate logging policy data
-        # TODO: currently, this method run the whole base_pipeline.run_pipeline. Think how to avoid that
         original_results, policy_data = self._generate_logging_policy_data(
             cutoff, exploration_rate
         )
@@ -123,7 +122,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         exploration_rate: float = None
     ) -> Tuple[Dict[str, Any], pd.DataFrame]:
         """
-        Generate logging policy data using the base pipeline.
+        Generate logging policy data using the base pipeline's generate_policy_data method.
         
         Args:
             cutoff: Score threshold for the original logging policy
@@ -132,13 +131,18 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         Returns:
             Tuple of (original_results, policy_data)
         """
-        # Run base pipeline to get policy data
-        original_results = self.base_pipeline.run_pipeline(
+        # Generate policy data directly without running the full pipeline
+        policy_data = self.base_pipeline.generate_policy_data(
             cutoff=cutoff,
-            exploration_rate=exploration_rate,
-            include_data=True  # We need the data for retraining
+            exploration_rate=exploration_rate
         )
-        policy_data = original_results['data']
+        
+        # Create minimal original_results structure with the information we need
+        # This ensures compatibility with the rest of the pipeline
+        original_results = {
+            'model_performance': self.base_pipeline.get_model_performance(),
+            'dataset_info': self.base_pipeline.get_dataset_info()
+        }
         
         return original_results, policy_data
 
