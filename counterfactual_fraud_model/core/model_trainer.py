@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Optional
 from sklearn.base import BaseEstimator
-from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score, average_precision_score
 
 from ..config import ModelConfig
 from ..protocols import ModelTrainerProtocol, ModelFactoryProtocol
@@ -76,11 +76,11 @@ class ModelTrainer(ModelTrainerProtocol):
         
         # Calculate metrics with zero_division handling
         performance = {
-            'accuracy': accuracy_score(y, y_pred),
             'precision': precision_score(y, y_pred, zero_division=0),
             'recall': recall_score(y, y_pred, zero_division=0),
             'f1': f1_score(y, y_pred, zero_division=0),
-            'roc_auc': roc_auc_score(y, y_pred_proba)
+            'roc_auc': roc_auc_score(y, y_pred_proba),
+            'average_precision': average_precision_score(y, y_pred_proba)
         }
         
         return performance
