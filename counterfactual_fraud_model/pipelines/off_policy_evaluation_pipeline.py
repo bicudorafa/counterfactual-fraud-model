@@ -6,6 +6,7 @@ dependency injection and composition for loose coupling.
 
 import pandas as pd
 from typing import Dict, Any
+from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 
 from ..config import OffPolicyEvaluationConfig, LoggingPolicyConfig
 from ..protocols import (
@@ -88,7 +89,10 @@ class OffPolicyEvaluationPipeline(PipelineProtocol):
         # Step 4: Calculate summary statistics
         summary_results = self._calculate_summary_statistics(policy_data)
         
-        # Step 5: Compile parameters used in this run
+        # Step 5: Calculate sklearn metrics using the same cutoff
+        sklearn_metrics = self.calculate_sklearn_metrics(cutoff=policy_config.cutoff)
+        
+        # Step 6: Compile parameters used in this run
         run_parameters = {
             'data_generator': self.data_generator.get_config().model_dump(),
             'logging_policy': policy_config.model_dump(),
@@ -96,10 +100,11 @@ class OffPolicyEvaluationPipeline(PipelineProtocol):
             'pipeline': self.config.pipeline.model_dump()
         }
         
-        # Step 6: Compile results
+        # Step 7: Compile results
         results = {
             **summary_results,
             'ope_metrics': ope_metrics_results,
+            'model': sklearn_metrics,
             'parameters': run_parameters
         }
         
@@ -111,6 +116,41 @@ class OffPolicyEvaluationPipeline(PipelineProtocol):
     def get_config(self) -> OffPolicyEvaluationConfig:
         """Get the current configuration."""
         return self.config
+    
+    def calculate_sklearn_metrics(self, cutoff: float = None) -> Dict[str, float]:
+        """
+        Calculate sklearn classification metrics on the generated data using the specified cutoff.
+        
+        Args:
+            cutoff: Score threshold for creating binary predictions from model_scores.
+                   If None, uses the cutoff from the logging policy configuration.
+                   
+        Returns:
+            Dictionary containing precision, recall, f1, roc_auc, and average_precision scores
+        """
+        # Use provided cutoff or fall back to config
+        threshold = cutoff if cutoff is not None else self.config.logging_policy.cutoff
+        
+        # Get the generated data
+        data = self._get_or_generate_data()
+        
+        # Extract ground truth labels and model scores
+        y_true = data['is_fraud'].values
+        y_scores = data['model_scores'].values
+        
+        # Create binary predictions based on cutoff
+        y_pred = (y_scores >= threshold).astype(int)
+        
+        # Calculate metrics
+        metrics = {
+            'precision': precision_score(y_true, y_pred, zero_division=0),
+            'recall': recall_score(y_true, y_pred, zero_division=0),
+            'f1': f1_score(y_true, y_pred, zero_division=0),
+            'roc_auc': roc_auc_score(y_true, y_scores),
+            'average_precision': average_precision_score(y_true, y_scores)
+        }
+        
+        return metrics
     
     def _get_or_generate_data(self) -> pd.DataFrame:
         """Get cached data or generate new data."""
