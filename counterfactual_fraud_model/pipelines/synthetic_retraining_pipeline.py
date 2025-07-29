@@ -133,11 +133,10 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         self._retrain_model(self._train_policy_data, effective_config)
         
         # Step 4: Evaluate retrained model on test data
-        # TODO: use the new actions probabilities to calculate the metrics oce I fix counterfactual estimator
         new_scores, binary_predictions = self._predict_on_test_data(self._test_policy_data, effective_config)
         
         # Step 5: Evaluate retrained model performance using counterfactual estimation
-        ope_metrics_results = self._evaluate_retrained_model(self._test_policy_data, binary_predictions)
+        ope_metrics_results = self._evaluate_retrained_model(self._test_policy_data, binary_predictions, new_scores)
         
         return {
             'original_results': self._original_results,
@@ -254,7 +253,8 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
     def _evaluate_retrained_model(
         self, 
         test_policy_data: pd.DataFrame, 
-        binary_predictions: np.ndarray
+        binary_predictions: np.ndarray,
+        new_scores: np.ndarray
     ) -> Dict[str, Any]:
         """
         Evaluate retrained model performance using counterfactual estimation.
@@ -262,6 +262,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         Args:
             test_policy_data: Test policy data for counterfactual estimation
             binary_predictions: Binary predictions from retrained model (for all test transactions)
+            new_scores: Probability scores from retrained model (for all test transactions)
             
         Returns:
             Dictionary containing OPE metrics results
@@ -272,12 +273,13 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             test_policy_data
         )
         
-        # Filter binary predictions to only allowed transactions (same filtering as estimator does internally)
+        # Filter both predictions and scores to only allowed transactions (same filtering as estimator does internally)
         allowed_mask = test_policy_data['policy_action'] == 'allow'
         allowed_predictions = binary_predictions[allowed_mask]
+        allowed_scores = new_scores[allowed_mask]
         
-        # Use the filtered predictions for counterfactual estimation
-        return estimator.estimate_ope_metrics(allowed_predictions)
+        # Use both filtered predictions and scores for counterfactual estimation
+        return estimator.estimate_ope_metrics(allowed_predictions, allowed_scores)
     
     def get_config(self) -> SyntheticRetrainingConfig:
         """Get the current configuration."""

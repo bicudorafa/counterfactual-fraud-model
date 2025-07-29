@@ -1,5 +1,3 @@
-# TODO: fix avergare precision to use the new actions probabilities
-
 """Optimized Counterfactual Values Estimator for Fraud Model Evaluation.
 
 This module provides optimized functionality to estimate counterfactual values
@@ -61,12 +59,14 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         self._precompute_arrays()
         
         # Available metrics
-        self.available_metrics = {
+        self.action_metrics = {
             'precision': self._weighted_precision,
             'recall': self._weighted_recall,
             # Stop using f1 for now, it isn't that informative for the simulations
             # 'f1': self._weighted_f1,
             'fraud_rate': self._weighted_fraud_rate,
+        }
+        self.proba_metrics = {
             'average_precision': self._weighted_average_precision
         }
         
@@ -94,21 +94,25 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         """
         # Use model_action as the counterfactual policy (converted to numpy)
         model_policy = (self.model_action_array == 'block').astype(int)
-        return self.estimate_ope_metrics(model_policy)
+        model_policy_proba = self.model_scores_array
+        return self.estimate_ope_metrics(model_policy, model_policy_proba)
     
-    def estimate_ope_metrics(self, new_actions: np.ndarray) -> Dict[str, any]:
+    def estimate_ope_metrics(self, new_actions: np.ndarray, new_actions_proba: np.ndarray) -> Dict[str, any]:
         """
         Optimized off-policy evaluation metrics estimation using Poisson bootstrap.
         
         Args:
             new_actions: Array of new policy actions (0=allow, 1=block)
+            new_actions_proba: Array of new policy action probabilities/scores
             
         Returns:
             Dictionary with estimated metrics and confidence intervals
         """
-        # Convert to numpy array if it's not already
+        # Convert to numpy arrays if they're not already
         if not isinstance(new_actions, np.ndarray):
             new_actions = np.array(new_actions)
+        if not isinstance(new_actions_proba, np.ndarray):
+            new_actions_proba = np.array(new_actions_proba)
             
         if len(new_actions) != self.n_observed:
             raise ValueError(
@@ -116,11 +120,17 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
                 f"number of observed transactions ({self.n_observed})"
             )
         
+        if len(new_actions_proba) != self.n_observed:
+            raise ValueError(
+                f"Length of new_actions_proba ({len(new_actions_proba)}) must match "
+                f"number of observed transactions ({self.n_observed})"
+            )
+        
         # Poisson bootstrap estimation (faster than regular bootstrap)
         bootstrap_results = {}
         
-        for metric_name in self.available_metrics.keys():
-            metric_func = self.available_metrics[metric_name]
+        # Process action-based metrics (need new_actions)
+        for metric_name, metric_func in self.action_metrics.items():
             bootstrap_values = []
             
             for _ in range(self.config.n_bootstrap):
@@ -136,6 +146,34 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
                 
                 # Calculate metric for this bootstrap sample
                 bootstrap_value = metric_func(new_actions, bootstrap_weights)
+                bootstrap_values.append(bootstrap_value)
+            
+            # Calculate statistics (compatible format with original)
+            bootstrap_values = np.array(bootstrap_values)
+            bootstrap_results[metric_name] = {
+                'mean': float(np.mean(bootstrap_values)),
+                'p025': float(np.percentile(bootstrap_values, 2.5)),
+                'p975': float(np.percentile(bootstrap_values, 97.5)),
+                'n_bootstrap': len(bootstrap_values),
+            }
+        
+        # Process probability-based metrics (need new_actions_proba)
+        for metric_name, metric_func in self.proba_metrics.items():
+            bootstrap_values = []
+            
+            for _ in range(self.config.n_bootstrap):
+                # Poisson bootstrap: sample with Poisson weights
+                poisson_weights = np.random.poisson(1, self.n_observed)
+                
+                # Apply Poisson weights to importance sampling weights
+                bootstrap_weights = self.importance_weights * poisson_weights
+                
+                # Skip if all weights are zero
+                if np.sum(bootstrap_weights) == 0:
+                    continue
+                
+                # Calculate metric for this bootstrap sample
+                bootstrap_value = metric_func(new_actions_proba, bootstrap_weights)
                 bootstrap_values.append(bootstrap_value)
             
             # Calculate statistics (compatible format with original)
@@ -266,7 +304,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         
         return weighted_fraud / weighted_total
     
-    def _weighted_average_precision(self, new_actions: np.ndarray, weights: np.ndarray) -> float:
+    def _weighted_average_precision(self, new_actions_proba: np.ndarray, weights: np.ndarray) -> float:
         """
         Calculate weighted average precision using sklearn's average_precision_score.
         
@@ -275,7 +313,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         previous threshold used as the weight.
         
         Args:
-            new_actions: Array of new policy actions (0=allow, 1=block) - not used for AP calculation
+            new_actions_proba: Array of new policy action probabilities/scores for AP calculation
             weights: Bootstrap weights (importance_weights * poisson_weights)
             
         Returns:
@@ -293,7 +331,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         # sklearn handles weight scaling internally, so no normalization needed
         ap_score = average_precision_score(
             y_true=self.is_fraud_array,
-            y_score=self.model_scores_array,
+            y_score=new_actions_proba,
             sample_weight=weights
         )
         return ap_score 
