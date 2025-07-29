@@ -6,11 +6,11 @@ functionality. Uses composition and dependency injection for loose coupling.
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from sklearn.model_selection import train_test_split
 from sklearn.base import BaseEstimator
 
-from ..config import SyntheticRetrainingConfig, LoggingPolicyConfig
+from ..config import SyntheticRetrainingConfig, LoggingPolicyConfig, RetrainingConfig
 from ..protocols import (
     SyntheticDataGeneratorProtocol,
     LoggingPolicyGeneratorProtocol,
@@ -65,123 +65,166 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         )
         
         # State for retrained model and metrics
-        self._retrained_model: BaseEstimator = None
-        self._retrain_performance: Dict[str, float] = None
-        self._retrain_dataset_info: Dict[str, Any] = None
-        self._preprocessing_info: Dict[str, Any] = None
+        self._retrained_model: Optional[BaseEstimator] = None
+        self._retrain_performance: Optional[Dict[str, float]] = None
+        self._retrain_dataset_info: Optional[Dict[str, Any]] = None
+        self._preprocessing_info: Optional[Dict[str, Any]] = None
+        
+        # State for logging policy data
+        self._original_results: Optional[Dict[str, Any]] = None
+        self._train_policy_data: Optional[pd.DataFrame] = None
+        self._test_policy_data: Optional[pd.DataFrame] = None
     
     def run_pipeline(
         self,
-        cutoff: float = None,
-        exploration_rate: float = None,
-        include_data: bool = None
+        logging_policy_cutoff: float = None,
+        logging_policy_exploration_rate: float = None,
+        retraining_config: RetrainingConfig = None,
     ) -> Dict[str, Any]:
         """
         Execute the complete synthetic retraining pipeline.
         
         Args:
-            cutoff: Score threshold for the original logging policy (overrides config if provided)
-            exploration_rate: Rate of exploration for blocked transactions (overrides config if provided)
-            include_data: Whether to include the full dataset in results (overrides config if provided)
+            logging_policy_cutoff: Score threshold for the original logging policy (overrides config if provided)
+            logging_policy_exploration_rate: Rate of exploration for blocked transactions (overrides config if provided)
+            retraining_config: Complete retraining configuration (overrides config if provided)
             
         Returns:
             Dictionary containing statistics, metrics, parameters, model performance, 
             dataset info, and optionally data for both original and retrained models
         """
-        # Step 1: Generate logging policy data
-        original_results, policy_data = self._generate_logging_policy_data(
-            cutoff, exploration_rate
+        # Steps 1-2: Generate logging policy data and split into train/test
+        self.generate_logging_policy_data(logging_policy_cutoff, logging_policy_exploration_rate)
+        
+        # Steps 3-6: Retrain model and evaluate performance
+        return self.run_retrain_pipeline(retraining_config)
+
+    def run_retrain_pipeline(
+        self,
+        retraining_config: RetrainingConfig = None,
+    ) -> Dict[str, Any]:
+        """
+        Execute the model retraining and evaluation pipeline on previously generated logging policy data.
+        
+        This method executes Steps 3-6 from the complete pipeline:
+        3. Retrain model on training data
+        4. Evaluate retrained model on test data  
+        5. Evaluate retrained model performance using counterfactual estimation
+        6. Compile final results
+        
+        Args:
+            retraining_config: Complete retraining configuration (overrides config if provided)
+            
+        Returns:
+            Dictionary containing statistics, metrics, parameters, model performance, 
+            dataset info, and optionally data for both original and retrained models
+            
+        Raises:
+            ValueError: If logging policy data has not been generated yet
+        """
+        # Validate that logging policy data has been generated
+        if self._train_policy_data is None or self._test_policy_data is None:
+            raise ValueError("Logging policy data must be generated before running retrain pipeline. Call generate_logging_policy_data() first.")
+        
+        # Use provided config or fall back to instance config
+        effective_config = retraining_config if retraining_config is not None else self.config.retraining
+        
+        # Step 3: Retrain model on training data
+        self._retrain_model(self._train_policy_data, effective_config)
+        
+        # Step 4: Evaluate retrained model on test data
+        # TODO: use the new actions probabilities to calculate the metrics oce I fix counterfactual estimator
+        new_scores, binary_predictions = self._predict_on_test_data(self._test_policy_data, effective_config)
+        
+        # Step 5: Evaluate retrained model performance using counterfactual estimation
+        ope_metrics_results = self._evaluate_retrained_model(self._test_policy_data, binary_predictions)
+        
+        return {
+            'original_results': self._original_results,
+            'retrained_model_performance': self._retrain_performance,
+            'ope_metrics': ope_metrics_results
+        }
+
+    def generate_logging_policy_data(
+        self, 
+        logging_policy_cutoff: float = None, 
+        logging_policy_exploration_rate: float = None
+    ) -> None:
+        """
+        Generate logging policy data and split into training and test sets.
+        
+        This method combines Steps 1 and 2 from the pipeline:
+        1. Generate logging policy data using the base pipeline
+        2. Split the policy data into training and test sets
+        
+        The results are stored as instance attributes:
+        - self._original_results: Original model performance and dataset info
+        - self._train_policy_data: Training subset of policy data
+        - self._test_policy_data: Test subset of policy data
+        
+        Args:
+            logging_policy_cutoff: Score threshold for the original logging policy (overrides config if provided)
+            logging_policy_exploration_rate: Rate of exploration for blocked transactions (overrides config if provided)
+        """
+        # Step 1: Generate policy data using base pipeline
+        policy_data = self.base_pipeline.generate_policy_data(
+            cutoff=logging_policy_cutoff,
+            exploration_rate=logging_policy_exploration_rate
         )
         
-        # Step 2: Split policy data into train and test
-        train_policy_data, test_policy_data = train_test_split(
+        # Create minimal original_results structure with the information we need
+        # This ensures compatibility with the rest of the pipeline
+        self._original_results = {
+            'model_performance': self.base_pipeline.get_model_performance(policy_data, logging_policy_cutoff),
+            'dataset_info': self.base_pipeline.get_dataset_info()
+        }
+        
+        # Step 2: Split policy data into train and test sets
+        self._train_policy_data, self._test_policy_data = train_test_split(
             policy_data,
             test_size=self.config.retraining.retrain_test_size,
             random_state=self.config.base_config.synthetic_data.random_state,
             stratify=policy_data['is_fraud'] if len(policy_data['is_fraud'].unique()) > 1 else None
         )
-        
-        # Step 3: Retrain model on training data
-        preprocessed_train_data = self._retrain_model(train_policy_data)
-        
-        # Step 4: Evaluate retrained model on test data
-        new_scores, binary_predictions = self._predict_on_test_data(test_policy_data)
-        
-        # Step 5: Evaluate retrained model performance using counterfactual estimation
-        ope_metrics_results = self._evaluate_retrained_model(test_policy_data, binary_predictions)
-        
-        # Step 6: Compile final results
-        return self._compile_results(
-            original_results, 
-            ope_metrics_results
-        )
 
-    def _generate_logging_policy_data(
-        self, 
-        cutoff: float = None, 
-        exploration_rate: float = None
-    ) -> Tuple[Dict[str, Any], pd.DataFrame]:
-        """
-        Generate logging policy data using the base pipeline's generate_policy_data method.
-        
-        Args:
-            cutoff: Score threshold for the original logging policy
-            exploration_rate: Rate of exploration for blocked transactions
-            
-        Returns:
-            Tuple of (original_results, policy_data)
-        """
-        # Generate policy data directly without running the full pipeline
-        policy_data = self.base_pipeline.generate_policy_data(
-            cutoff=cutoff,
-            exploration_rate=exploration_rate
-        )
-        
-        # Build policy config to get the actual cutoff being used
-        policy_config = self.base_pipeline._build_policy_config(cutoff, exploration_rate)
-        
-        # Create minimal original_results structure with the information we need
-        # This ensures compatibility with the rest of the pipeline
-        original_results = {
-            'model_performance': self.base_pipeline.get_model_performance(policy_data, policy_config.cutoff),
-            'dataset_info': self.base_pipeline.get_dataset_info()
-        }
-        
-        return original_results, policy_data
-
-    def _retrain_model(self, train_policy_data: pd.DataFrame) -> pd.DataFrame:
+    def _retrain_model(self, train_policy_data: pd.DataFrame, config: RetrainingConfig) -> None:
         """
         Preprocess training data using strategy and train model.
         
         Args:
             train_policy_data: DataFrame containing training policy data
+            config: Retraining configuration to use
             
         Returns:
             Preprocessed training data
         """
+        # Create preprocessor using the provided config
+        data_preprocessor = create_preprocessor(
+            config.retrain_model.strategy,
+            config.retrain_model.strategy_params
+        )
+        
         # Step 1: Use preprocessor to prepare training data
-        X_train, y_train, sample_weights = self.data_preprocessor.prepare_training_data(train_policy_data)
+        X_train, y_train, sample_weights = data_preprocessor.prepare_training_data(train_policy_data)
         
         # Store preprocessing info for reporting
-        self._preprocessing_info = self.data_preprocessor.get_strategy_info()
+        self._preprocessing_info = data_preprocessor.get_strategy_info()
         
         # Step 2: Train new model using injected trainer with sample weights
         self._retrained_model = self.model_trainer.train_model(
-            X_train, y_train, self.config.retraining.retrain_model.base_model, sample_weights
+            X_train, y_train, config.retrain_model.base_model, sample_weights
         )
         
         # Step 3: Calculate dataset info based on preprocessed data
-        self._retrain_dataset_info = self._calculate_dataset_info_from_preprocessed(X_train, y_train)
-        
-        # Return preprocessed training data summary
-        return self._create_preprocessed_data_summary(X_train, y_train)
+        self._retrain_dataset_info = self._create_preprocessed_data_summary(X_train, y_train)
 
-    def _predict_on_test_data(self, test_policy_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    def _predict_on_test_data(self, test_policy_data: pd.DataFrame, config: RetrainingConfig) -> Tuple[np.ndarray, np.ndarray]:
         """
         Generate predictions on test data using the retrained model.
         
         Args:
             test_policy_data: DataFrame containing test policy data
+            config: Retraining configuration to use
             
         Returns:
             Tuple of (new_scores, binary_predictions)
@@ -197,14 +240,14 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         
         # Calculate retrained model performance on test data
         self._retrain_performance = self.model_trainer.calculate_performance(
-            self._retrained_model, X_test, y_test
+            self._retrained_model, X_test, y_test, config.retrain_model.classification_threshold
         )
         
         # Generate new model scores on test set
         new_scores = self._retrained_model.predict_proba(X_test)[:, 1]  # Probability of fraud
         
         # Convert to binary predictions using classification threshold
-        binary_predictions = (new_scores > self.config.retraining.retrain_model.classification_threshold).astype(int)
+        binary_predictions = (new_scores > config.retrain_model.classification_threshold).astype(int)
         
         return new_scores, binary_predictions
 
@@ -235,30 +278,6 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         
         # Use the filtered predictions for counterfactual estimation
         return estimator.estimate_ope_metrics(allowed_predictions)
-
-    def _compile_results(
-        self,
-        original_results: Dict[str, Any],
-        ope_metrics_results: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Compile final results from all pipeline steps.
-        
-        Args:
-            original_results: Results from base pipeline
-            ope_metrics_results: Counterfactual estimation results
-            
-        Returns:
-            Simplified results dictionary with only key information
-        """
-        # Compile results with only the three key pieces of information
-        results = {
-            'original_results': original_results,
-            'retrained_model_performance': self._retrain_performance,
-            'ope_metrics': ope_metrics_results
-        }
-            
-        return results
     
     def get_config(self) -> SyntheticRetrainingConfig:
         """Get the current configuration."""
@@ -276,16 +295,23 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
             raise ValueError("Pipeline must be run before accessing retrained dataset info")
         return self._retrain_dataset_info.copy()
     
-    def _calculate_dataset_info_from_preprocessed(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
-        """Calculate information about the preprocessed dataset."""
-        return {
-            'n_samples': len(X),
-            'n_features': len(X.columns),
-            'fraud_rate': y.mean(),
-            'n_fraud': y.sum(),
-            'n_legitimate': (y == 0).sum(),
-            'preprocessing_strategy': self._preprocessing_info.get('strategy', 'unknown') if self._preprocessing_info else 'unknown'
-        }
+    def get_original_results(self) -> Dict[str, Any]:
+        """Get the original model performance and dataset info."""
+        if self._original_results is None:
+            raise ValueError("Logging policy data must be generated before accessing original results")
+        return self._original_results.copy()
+    
+    def get_train_policy_data(self) -> pd.DataFrame:
+        """Get the training subset of policy data."""
+        if self._train_policy_data is None:
+            raise ValueError("Logging policy data must be generated before accessing training data")
+        return self._train_policy_data.copy()
+    
+    def get_test_policy_data(self) -> pd.DataFrame:
+        """Get the test subset of policy data."""
+        if self._test_policy_data is None:
+            raise ValueError("Logging policy data must be generated before accessing test data")
+        return self._test_policy_data.copy()
     
     def _create_preprocessed_data_summary(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
         """Create a summary of the preprocessed training data."""

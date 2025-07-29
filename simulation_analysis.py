@@ -192,8 +192,8 @@ def plot_ope_metrics(results: List[Dict[str, Any]]) -> None:
     # Get model metrics (same for all results)
     model_metrics = results[0]['model']
 
-    # Get fraud rate from statistics (same for all results)
-    model_metrics['fraud_rate'] = results[0]['statistics']['fraud_rate_overall']
+    # Get fraud rate from statistics (NOTE: it isn't the for all results, but it's pretty close if the exploration rate is low)
+    model_metrics['fraud_rate'] = results[0]['statistics']['fraud_rate_allowed']
     
     # Create subplots
     n_metrics = len(metrics)

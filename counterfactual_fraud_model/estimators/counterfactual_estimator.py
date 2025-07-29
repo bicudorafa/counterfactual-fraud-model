@@ -1,3 +1,5 @@
+# TODO: fix avergare precision to use the new actions probabilities
+
 """Optimized Counterfactual Values Estimator for Fraud Model Evaluation.
 
 This module provides optimized functionality to estimate counterfactual values

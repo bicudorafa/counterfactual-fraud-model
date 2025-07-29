@@ -145,4 +145,5 @@ class SyntheticRetrainingConfig(BaseModel):
     """Complete configuration for synthetic retraining pipeline."""
     
     base_config: SyntheticOffPolicyEvaluationConfig = Field(default_factory=SyntheticOffPolicyEvaluationConfig)
-    retraining: RetrainingConfig = Field(default_factory=RetrainingConfig) 
+    retraining: RetrainingConfig = Field(default_factory=RetrainingConfig)
+    # TODO: Add a config for counterfactual estimator. Currently, the retraning pipeline uses the same counterfactual estimator as the base pipeline.
