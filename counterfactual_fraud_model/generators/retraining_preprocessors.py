@@ -38,7 +38,7 @@ class FilteringDataPreprocessor(RetrainingDataPreprocessorProtocol):
         Returns:
             Tuple of (features_df, target_series, None) - no sample weights for filtering
         """
-        # Filter to only allowed transactions (model_action == 'allow')
+        # Filter to only allowed transactions by the model (model_action == 'allow'), not by the policy (policy_action == 'allow'). The goal is to mimic what the policy would do.
         allowed_data = policy_data[policy_data['model_action'] == 'allow'].copy()
         
         if len(allowed_data) == 0:
@@ -103,8 +103,8 @@ class WeightingDataPreprocessor(RetrainingDataPreprocessorProtocol):
         Returns:
             Tuple of (features_df, target_series, weights)
         """
-        # Filter to only allowed transactions (model_action == 'allow')
-        allowed_data = policy_data[policy_data['model_action'] == 'allow'].copy()
+        # Filter to only allowed transactions by the policy (policy_action == 'allow')
+        allowed_data = policy_data[policy_data['policy_action'] == 'allow'].copy()
         
         if len(allowed_data) == 0:
             raise ValueError("No transactions with model_action == 'allow' found. Cannot retrain model.")
