@@ -5,9 +5,122 @@ import seaborn as sns
 from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
-# Import the simulation function from temp.py
-from temp import run_retraining_simulations
-from counterfactual_fraud_model.config import RetrainingStrategy
+from counterfactual_fraud_model.config import (
+    SyntheticRetrainingConfig,
+    SyntheticOffPolicyEvaluationConfig,
+    SyntheticDataConfig,
+    ModelConfig,
+    LoggingPolicyConfig,
+    CounterfactualEstimatorConfig,
+    RetrainingConfig,
+    RetrainingModelConfig,
+    ModelType,
+    RetrainingStrategy
+)
+from counterfactual_fraud_model.pipelines import SyntheticRetrainingPipeline
+# TODO: entender se o pre_processing está afetando evaluation tambem, porque nas metricas normais está melhor, mas no OPE está estranho
+
+
+def run_retraining_simulations(
+    exploration_rates: np.ndarray,
+    strategies: List[RetrainingStrategy],
+    cutoff: float = 0.05,
+    sample_size: int = 100_000,
+    classification_threshold: float = 0.1,
+    random_state: int = 42
+) -> Tuple[List[Dict[str, Any]], pd.DataFrame]:
+    """
+    Run multiple SyntheticRetrainingPipeline simulations with different exploration rates and strategies.
+    
+    Args:
+        exploration_rates: Array of exploration rate values to test
+        strategies: List of retraining strategies to compare
+        cutoff: Fixed cutoff value for all simulations
+        sample_size: Number of samples in synthetic dataset
+        classification_threshold: Threshold for binary classification
+        random_state: Random seed for reproducibility
+        
+    Returns:
+        Tuple of (list of simulation results, reference data for plots)
+    """
+    # Calculate total number of simulations
+    total_sims = len(exploration_rates) * len(strategies)
+    print(f"Running {total_sims} simulations...")
+    print(f"  - Exploration rates: {len(exploration_rates)} values")
+    print(f"  - Retraining strategies: {len(strategies)} strategies")
+    
+    results = []
+    reference_data = None  # Will store base data for plotting
+
+    
+    # Run simulations for each combination
+    for exploration_rate in exploration_rates:
+        print(f"Running simulations for exploration_rate={exploration_rate:.3f}")
+
+        # Base config for most simulations
+        config = SyntheticRetrainingConfig(
+            base_config=SyntheticOffPolicyEvaluationConfig(
+                synthetic_data=SyntheticDataConfig(
+                    n_samples=sample_size,
+                    n_features=15,
+                    n_informative=10,
+                    n_redundant=3,
+                    n_repeated=0,
+                    random_state=random_state  # Same seed for fair comparison
+                ),
+                model=ModelConfig(
+                    model_type=ModelType.LIGHTGBM,
+                    random_state=random_state
+                ),
+                logging_policy=LoggingPolicyConfig(
+                    cutoff=cutoff,
+                    exploration_rate=exploration_rate,
+                    random_state=random_state
+                ),
+                counterfactual_estimator=CounterfactualEstimatorConfig(
+                    n_bootstrap=5000,  # Reasonable for analysis
+                    random_state=random_state
+                )
+            )
+        )
+        
+        # Initialize and run pipeline
+        pipeline = SyntheticRetrainingPipeline(config)
+
+        pipeline.generate_logging_policy_data()
+
+        for strategy in strategies:
+            print(f"Strategy={strategy.value} simulation")
+
+            retraining_config = RetrainingConfig(
+                retrain_test_size=0.3,
+                retrain_model=RetrainingModelConfig(
+                    base_model=ModelConfig(
+                        model_type=ModelType.LIGHTGBM,
+                        random_state=random_state
+                    ),
+                    strategy=strategy, # it doesn't matter which strategy we use, it'll change dinamically through the simulation
+                    classification_threshold=classification_threshold
+                )
+            )
+            
+            result = pipeline.run_retrain_pipeline(retraining_config=retraining_config)  # Removed include_data parameter
+        
+            # Add metadata for easy tracking
+            result['simulation_metadata'] = {
+                'exploration_rate': exploration_rate,
+                'strategy': strategy.value,
+                'result': result
+            }
+            
+            results.append(result)
+            
+            # Store reference data from first simulation for plotting
+            if reference_data is None:
+                # Get the base data for plotting (same across all simulations with same random_state)
+                reference_data = pipeline.get_test_policy_data()
+    
+    return results, reference_data
 
 
 class RetrainingSimulationAnalyzer:
@@ -53,9 +166,9 @@ class RetrainingSimulationAnalyzer:
         
         return pd.DataFrame(processed_data)
     
-    def create_line_plots_with_ci(self, figsize: Tuple[int, int] = (15, 10)) -> plt.Figure:
+    def create_dot_chart(self, figsize: Tuple[int, int] = (15, 10)) -> plt.Figure:
         """
-        Create line plots with confidence interval ribbons for each metric.
+        Create dot charts with confidence intervals for each metric.
         
         Args:
             figsize: Figure size tuple
@@ -76,98 +189,48 @@ class RetrainingSimulationAnalyzer:
             ax = axes[i]
             metric_data = self.df[self.df['metric'] == metric]
             
-            # Plot for each strategy
-            for strategy in metric_data['strategy'].unique():
-                strategy_data = metric_data[metric_data['strategy'] == strategy].sort_values('exploration_rate')
-                
-                x = strategy_data['exploration_rate']
-                y = strategy_data['mean']
-                y_lower = strategy_data['p025']
-                y_upper = strategy_data['p975']
-                
-                # Plot line
-                ax.plot(x, y, 'o-', color=colors[strategy], linewidth=2, 
-                       markersize=6, label=f'{strategy.title()}', alpha=0.8)
-                
-                # Plot confidence interval
-                ax.fill_between(x, y_lower, y_upper, color=colors[strategy], 
-                              alpha=0.2, label=f'{strategy.title()} 95% CI')
-            
-            # Formatting
-            ax.set_xlabel('Exploration Rate')
-            ax.set_ylabel(f'{metric.replace("_", " ").title()}')
-            ax.set_title(f'{metric.replace("_", " ").title()} vs Exploration Rate')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            
-            # Set x-axis to show all exploration rates
-            ax.set_xticks(self.df['exploration_rate'].unique())
-        
-        # Remove empty subplot if odd number of metrics
-        if n_metrics < len(axes):
-            fig.delaxes(axes[-1])
-            
-        fig.suptitle('OPE Metrics Comparison: Filtering vs Weighting Strategies', 
-                     fontsize=16, fontweight='bold')
-        
-        return fig
-    
-    def create_bar_plots_with_error_bars(self, figsize: Tuple[int, int] = (15, 10)) -> plt.Figure:
-        """
-        Create bar plots with error bars for each metric.
-        
-        Args:
-            figsize: Figure size tuple
-            
-        Returns:
-            matplotlib Figure object
-        """
-        metrics = self.df['metric'].unique()
-        n_metrics = len(metrics)
-        
-        # Create subplots
-        fig, axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
-        axes = axes.flatten()
-        
-        colors = {'filtering': '#2E86C1', 'weighting': '#E74C3C'}
-        
-        for i, metric in enumerate(metrics):
-            ax = axes[i]
-            metric_data = self.df[self.df['metric'] == metric]
-            
-            # Prepare data for grouped bar plot
+            # Prepare data for dot chart
             exploration_rates = sorted(metric_data['exploration_rate'].unique())
             strategies = sorted(metric_data['strategy'].unique())
             
-            x = np.arange(len(exploration_rates))
-            width = 0.35
+            x_offset = 0.001  # Small offset for different strategies on x-axis
             
             for j, strategy in enumerate(strategies):
                 strategy_data = metric_data[metric_data['strategy'] == strategy].sort_values('exploration_rate')
                 
-                means = strategy_data['mean'].values
-                errors = [(strategy_data['mean'] - strategy_data['p025']).values,
-                         (strategy_data['p975'] - strategy_data['mean']).values]
+                # Use exploration rates as x positions (with small offset for strategies)
+                x_positions = strategy_data['exploration_rate'].values + j * x_offset
                 
-                ax.bar(x + j*width, means, width, 
-                      color=colors[strategy], alpha=0.7, 
-                      label=f'{strategy.title()}',
-                      yerr=errors, capsize=5, error_kw={'alpha': 0.6})
+                means = strategy_data['mean'].values
+                errors_lower = (strategy_data['mean'] - strategy_data['p025']).values
+                errors_upper = (strategy_data['p975'] - strategy_data['mean']).values
+                
+                # Plot dots
+                ax.scatter(x_positions, means, color=colors[strategy], s=80, 
+                          alpha=0.8, label=f'{strategy.title()}', zorder=3)
+                
+                # Plot vertical error bars (confidence intervals)
+                ax.errorbar(x_positions, means, yerr=[errors_lower, errors_upper],
+                           fmt='none', color=colors[strategy], alpha=0.6, 
+                           linewidth=2, capsize=4, capthick=2, zorder=2)
             
             # Formatting
             ax.set_xlabel('Exploration Rate')
             ax.set_ylabel(f'{metric.replace("_", " ").title()}')
             ax.set_title(f'{metric.replace("_", " ").title()} vs Exploration Rate')
-            ax.set_xticks(x + width/2)
-            ax.set_xticklabels([f'{rate:.2f}' for rate in exploration_rates])
+            
+            # Set x-axis ticks to exploration rates
+            ax.set_xticks(exploration_rates)
+            ax.set_xticklabels([f'{rate:.3f}' for rate in exploration_rates])
+            
             ax.legend()
-            ax.grid(True, alpha=0.3, axis='y')
+            ax.grid(True, alpha=0.3)
         
         # Remove empty subplot if odd number of metrics
         if n_metrics < len(axes):
             fig.delaxes(axes[-1])
             
-        fig.suptitle('OPE Metrics Comparison: Filtering vs Weighting Strategies (Bar Plot)', 
+        fig.suptitle('OPE Metrics Comparison: Filtering vs Weighting Strategies (Dot Chart)', 
                      fontsize=16, fontweight='bold')
         
         return fig
@@ -236,7 +299,7 @@ def run_analysis():
     print("Starting retraining simulation analysis...")
     
     # Define simulation parameters
-    exploration_rates = np.array([0.05, 0.1, 0.2])
+    exploration_rates = np.linspace(0.01, 0.1, 5)
     strategies = [RetrainingStrategy.FILTERING, RetrainingStrategy.WEIGHTING]
     
     print(f"Running simulations with:")
@@ -247,7 +310,7 @@ def run_analysis():
     results, reference_data = run_retraining_simulations(
         exploration_rates=exploration_rates,
         strategies=strategies,
-        sample_size=10_000,
+        sample_size=300_000,
         random_state=42
     )
     
@@ -257,15 +320,10 @@ def run_analysis():
     # Generate visualizations
     print("\nCreating visualizations...")
     
-    # Line plots with confidence intervals
-    fig_line = analyzer.create_line_plots_with_ci()
-    fig_line.savefig('retraining_simulation_line_plots.png', dpi=300, bbox_inches='tight')
-    print("✓ Line plots with confidence intervals saved as 'retraining_simulation_line_plots.png'")
-    
-    # Bar plots with error bars
-    fig_bar = analyzer.create_bar_plots_with_error_bars()
-    fig_bar.savefig('retraining_simulation_bar_plots.png', dpi=300, bbox_inches='tight')
-    print("✓ Bar plots with error bars saved as 'retraining_simulation_bar_plots.png'")
+    # Dot chart with confidence intervals
+    fig_dot = analyzer.create_dot_chart()
+    fig_dot.savefig('retraining_simulation_dot_chart.png', dpi=300, bbox_inches='tight')
+    print("✓ Dot chart with confidence intervals saved as 'retraining_simulation_dot_chart.png'")
     
     # Generate summary table
     summary_table = analyzer.create_summary_table()
