@@ -97,6 +97,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         model_policy_proba = self.model_scores_array
         return self.estimate_ope_metrics(model_policy, model_policy_proba)
     
+    # TODO: better design this method to accept dataframes with the original structure from data
     def estimate_ope_metrics(self, new_actions: np.ndarray, new_actions_proba: np.ndarray) -> Dict[str, any]:
         """
         Optimized off-policy evaluation metrics estimation using Poisson bootstrap.
