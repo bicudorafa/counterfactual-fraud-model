@@ -101,19 +101,37 @@ class LoggingPolicyGeneratorProtocol(Protocol):
 class CounterfactualEstimatorProtocol(Protocol):
     """Protocol for counterfactual estimators."""
     
-    def estimate_policy_metrics(self) -> Dict[str, Any]:
+    def estimate_policy_metrics(self, is_vectorized: bool = True) -> Dict[str, Any]:
         """Estimate counterfactual policy metrics.
+        
+        Args:
+            is_vectorized: If True, uses the vectorized implementation for better performance
+                         with large datasets. If False, uses the loop-based implementation.
+                         Default True for optimal performance.
         
         Returns:
             Dictionary with estimated metrics and confidence intervals
         """
         ...
     
-    def estimate_ope_metrics(self, new_actions: np.ndarray) -> Dict[str, Any]:
-        """Estimate off-policy evaluation metrics for new actions.
+    def estimate_ope_metrics(self, new_actions: np.ndarray, new_actions_proba: np.ndarray) -> Dict[str, Any]:
+        """Estimate off-policy evaluation metrics using loop-based implementation.
         
         Args:
             new_actions: Array of new policy actions (0=allow, 1=block)
+            new_actions_proba: Array of new policy action probabilities/scores
+            
+        Returns:
+            Dictionary with estimated metrics and confidence intervals
+        """
+        ...
+    
+    def estimate_ope_metrics_vectorized(self, new_actions: np.ndarray, new_actions_proba: np.ndarray) -> Dict[str, Any]:
+        """Estimate off-policy evaluation metrics using vectorized implementation.
+        
+        Args:
+            new_actions: Array of new policy actions (0=allow, 1=block)
+            new_actions_proba: Array of new policy action probabilities/scores
             
         Returns:
             Dictionary with estimated metrics and confidence intervals

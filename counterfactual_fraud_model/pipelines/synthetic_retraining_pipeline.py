@@ -279,7 +279,7 @@ class SyntheticRetrainingPipeline(PipelineProtocol):
         allowed_scores = new_scores[allowed_mask]
         
         # Use both filtered predictions and scores for counterfactual estimation
-        return estimator.estimate_ope_metrics(allowed_predictions, allowed_scores)
+        return estimator.estimate_ope_metrics_vectorized(allowed_predictions, allowed_scores)
     
     def get_config(self) -> SyntheticRetrainingConfig:
         """Get the current configuration."""
