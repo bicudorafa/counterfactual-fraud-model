@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from typing import Dict, List
-from sklearn.metrics import average_precision_score
+from sklearn.metrics import average_precision_score, precision_score, recall_score, f1_score, roc_auc_score, brier_score_loss
 
 from ..config import CounterfactualEstimatorConfig
 from ..protocols import CounterfactualEstimatorProtocol
@@ -68,12 +68,64 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
             'fraud_rate': self._weighted_fraud_rate,
         }
         self.proba_metrics = {
-            'average_precision': self._weighted_average_precision
+            'average_precision': self._weighted_average_precision,
+            'roc_auc': self._weighted_roc_auc,
+            'brier_score': self._weighted_brier_score
         }
         
         # Set random seed for reproducibility
         if config.random_state is not None:
             np.random.seed(config.random_state)
+    
+    def get_available_action_metrics(self) -> List[str]:
+        """
+        Get list of available action-based metrics.
+        
+        Returns:
+            List of metric names that can be used with action_metrics parameter
+        """
+        return list(self.action_metrics.keys())
+    
+    def get_available_proba_metrics(self) -> List[str]:
+        """
+        Get list of available probability-based metrics.
+        
+        Returns:
+            List of metric names that can be used with proba_metrics parameter
+        """
+        return list(self.proba_metrics.keys())
+    
+    def _validate_metric_selection(self, action_metrics: List[str] = None, 
+                                 proba_metrics: List[str] = None) -> None:
+        """
+        Validate that requested metrics are available.
+        
+        Args:
+            action_metrics: List of requested action-based metrics
+            proba_metrics: List of requested probability-based metrics
+            
+        Raises:
+            ValueError: If any requested metric is not available
+        """
+        if action_metrics is not None:
+            available_action = set(self.action_metrics.keys())
+            requested_action = set(action_metrics)
+            invalid_action = requested_action - available_action
+            if invalid_action:
+                raise ValueError(
+                    f"Invalid action metrics: {invalid_action}. "
+                    f"Available: {available_action}"
+                )
+        
+        if proba_metrics is not None:
+            available_proba = set(self.proba_metrics.keys())
+            requested_proba = set(proba_metrics)
+            invalid_proba = requested_proba - available_proba
+            if invalid_proba:
+                raise ValueError(
+                    f"Invalid proba metrics: {invalid_proba}. "
+                    f"Available: {available_proba}"
+                )
     
     def _precompute_arrays(self):
         """Convert DataFrame columns to numpy arrays for faster bootstrap operations."""
@@ -86,28 +138,68 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         # Pre-compute importance sampling weights
         self.importance_weights = 1.0 / self.propensity_scores_array
     
-    def estimate_policy_metrics(self, is_vectorized: bool = True) -> Dict[str, any]:
+    def _validate_data(self, data: pd.DataFrame, required_columns: List[str]) -> None:
+        """Validate that data contains required columns."""
+        missing_columns = set(required_columns) - set(data.columns)
+        if missing_columns:
+            raise ValueError(f"Data is missing required columns: {missing_columns}")
+    
+    def get_config(self) -> CounterfactualEstimatorConfig:
+        """Get the current configuration."""
+        return self.config
+    
+    def estimate_policy_metrics(self, is_vectorized: bool = True, 
+                               action_metrics: List[str] = None,
+                               proba_metrics: List[str] = None) -> Dict[str, any]:
         """
         Estimate counterfactual policy metrics for the original model policy.
         
         Args:
             is_vectorized: If True, uses the vectorized implementation for better performance
                          with large datasets. If False, uses the loop-based implementation.
-                         Default False for backward compatibility.
+                         Default True for backward compatibility.
+            action_metrics: List of action-based metrics to calculate. 
+                           None (default) = all available: ['precision', 'recall', 'fraud_rate']
+            proba_metrics: List of probability-based metrics to calculate.
+                          None (default) = all available: ['average_precision', 'roc_auc', 'brier_score']
         
         Returns:
             Dictionary with estimated metrics and confidence intervals
+            
+        Examples:
+            # Default behavior - all metrics
+            results = estimator.estimate_policy_metrics()
+            
+            # Only precision and recall
+            results = estimator.estimate_policy_metrics(
+                action_metrics=['precision', 'recall'])
+            
+            # Only ROC AUC
+            results = estimator.estimate_policy_metrics(
+                proba_metrics=['roc_auc'])
+            
+            # Mix of both categories
+            results = estimator.estimate_policy_metrics(
+                action_metrics=['precision'],
+                proba_metrics=['roc_auc', 'brier_score'])
         """
+        # Validate metric selection
+        self._validate_metric_selection(action_metrics, proba_metrics)
+        
         # Use model_action as the counterfactual policy (converted to numpy)
         model_policy = (self.model_action_array == 'block').astype(int)
         model_policy_proba = self.model_scores_array
         if is_vectorized:
-            return self.estimate_ope_metrics_vectorized(model_policy, model_policy_proba)
+            return self.estimate_ope_metrics_vectorized(model_policy, model_policy_proba,
+                                                      action_metrics, proba_metrics)
         else:
-            return self.estimate_ope_metrics(model_policy, model_policy_proba)
+            return self.estimate_ope_metrics(model_policy, model_policy_proba,
+                                           action_metrics, proba_metrics)
     
     # TODO: better design this method to accept dataframes with the original structure from data
-    def estimate_ope_metrics(self, new_actions: np.ndarray, new_actions_proba: np.ndarray) -> Dict[str, any]:
+    def estimate_ope_metrics(self, new_actions: np.ndarray, new_actions_proba: np.ndarray,
+                            action_metrics: List[str] = None, 
+                            proba_metrics: List[str] = None) -> Dict[str, any]:
         """
         Off-policy evaluation metrics estimation using Poisson bootstrap (loop-based implementation).
         
@@ -123,16 +215,38 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         Args:
             new_actions: Array of new policy actions (0=allow, 1=block)
             new_actions_proba: Array of new policy action probabilities/scores
+            action_metrics: List of action-based metrics to calculate. 
+                           None (default) = all available: ['precision', 'recall', 'fraud_rate']
+            proba_metrics: List of probability-based metrics to calculate.
+                          None (default) = all available: ['average_precision', 'roc_auc', 'brier_score']
             
         Returns:
             Dictionary with estimated metrics and confidence intervals
             
+        Examples:
+            # Default behavior - all metrics
+            results = estimator.estimate_ope_metrics(actions, proba)
+            
+            # Only precision and recall
+            results = estimator.estimate_ope_metrics(actions, proba, 
+                                                   action_metrics=['precision', 'recall'])
+            
+            # Only ROC AUC
+            results = estimator.estimate_ope_metrics(actions, proba, 
+                                                   proba_metrics=['roc_auc'])
+            
         See Also:
             estimate_ope_metrics_vectorized: Faster alternative for large datasets
         """
-        return self._estimate_ope_metrics_loop_based(new_actions, new_actions_proba)
+        # Validate metric selection
+        self._validate_metric_selection(action_metrics, proba_metrics)
+        
+        return self._estimate_ope_metrics_loop_based(new_actions, new_actions_proba,
+                                                   action_metrics, proba_metrics)
     
-    def estimate_ope_metrics_vectorized(self, new_actions: np.ndarray, new_actions_proba: np.ndarray) -> Dict[str, any]:
+    def estimate_ope_metrics_vectorized(self, new_actions: np.ndarray, new_actions_proba: np.ndarray,
+                                       action_metrics: List[str] = None,
+                                       proba_metrics: List[str] = None) -> Dict[str, any]:
         """
         Vectorized off-policy evaluation metrics estimation using matrix operations.
         
@@ -147,68 +261,29 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         Args:
             new_actions: Array of new policy actions (0=allow, 1=block)
             new_actions_proba: Array of new policy action probabilities/scores
+            action_metrics: List of action-based metrics to calculate. 
+                           None (default) = all available: ['precision', 'recall', 'fraud_rate']
+            proba_metrics: List of probability-based metrics to calculate.
+                          None (default) = all available: ['average_precision', 'roc_auc', 'brier_score']
             
         Returns:
             Dictionary with estimated metrics and confidence intervals
-        """
-        # Convert to numpy arrays if they're not already
-        if not isinstance(new_actions, np.ndarray):
-            new_actions = np.array(new_actions)
-        if not isinstance(new_actions_proba, np.ndarray):
-            new_actions_proba = np.array(new_actions_proba)
             
-        if len(new_actions) != self.n_observed:
-            raise ValueError(
-                f"Length of new_actions ({len(new_actions)}) must match "
-                f"number of observed transactions ({self.n_observed})"
-            )
+        Examples:
+            # Default behavior - all metrics
+            results = estimator.estimate_ope_metrics_vectorized(actions, proba)
+            
+            # Only specific metrics for better performance
+            results = estimator.estimate_ope_metrics_vectorized(actions, proba,
+                                                              action_metrics=['precision'],
+                                                              proba_metrics=['roc_auc'])
+        """
+        # Validate inputs and metrics
+        self._validate_metric_selection(action_metrics, proba_metrics)
+        new_actions, new_actions_proba = self._validate_and_convert_inputs(new_actions, new_actions_proba)
         
-        if len(new_actions_proba) != self.n_observed:
-            raise ValueError(
-                f"Length of new_actions_proba ({len(new_actions_proba)}) must match "
-                f"number of observed transactions ({self.n_observed})"
-            )
-        
-        # Performance and memory warnings
-        memory_elements = self.n_observed * self.config.n_bootstrap
-        estimated_memory_mb = memory_elements * 8 / (1024 * 1024)  # 8 bytes per float64
-        estimated_memory_gb = estimated_memory_mb / 1024  # Convert to GB
-        
-        if self.n_observed < 1000:
-            warnings.warn(
-                f"Using vectorized method with small dataset (n_observed={self.n_observed}). "
-                f"The loop-based method estimate_ope_metrics() may be more efficient for small datasets. "
-                f"Consider using the standard method for n_observed < 1,000.",
-                UserWarning,
-                stacklevel=2
-            )
-        
-        if estimated_memory_gb > 8.0:  # Warn if estimated memory > 8GB (approaching 10GB limit)
-            warnings.warn(
-                f"Vectorized method will allocate ~{estimated_memory_gb:.2f}GB of memory "
-                f"({self.n_observed:,} observations × {self.config.n_bootstrap:,} bootstrap samples). "
-                f"This approaches the 10GB memory limit. Consider reducing n_bootstrap or using "
-                f"the loop-based method estimate_ope_metrics() if memory is constrained.",
-                UserWarning,
-                stacklevel=2
-            )
-        elif estimated_memory_gb > 5.0:  # Info warning for moderate memory usage
-            warnings.warn(
-                f"Vectorized method will allocate ~{estimated_memory_gb:.2f}GB of memory "
-                f"({self.n_observed:,} observations × {self.config.n_bootstrap:,} bootstrap samples). "
-                f"Monitor memory usage if running on constrained systems.",
-                UserWarning,
-                stacklevel=2
-            )
-        
-        if memory_elements > 1_250_000_000:  # ~10GB threshold (1.25B elements * 8 bytes = 10GB)
-            warnings.warn(
-                f"Very large matrix operation requested ({memory_elements:,} elements, "
-                f"~{estimated_memory_gb:.2f}GB). This may cause memory issues or system instability. "
-                f"Consider using the loop-based method estimate_ope_metrics() or reducing the problem size.",
-                UserWarning,
-                stacklevel=2
-            )
+        # Check performance and memory requirements
+        self._warn_vectorized_performance()
         
         # Generate all Poisson weights at once: shape (n_observed, n_bootstrap)
         poisson_matrix = np.random.poisson(1, (self.n_observed, self.config.n_bootstrap))
@@ -217,40 +292,13 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         # Shape: (n_observed, n_bootstrap)
         bootstrap_weights_matrix = self.importance_weights[:, np.newaxis] * poisson_matrix
         
-        # Results storage
-        bootstrap_results = {}
+        # Filter and process metrics
+        action_metrics_to_run, proba_metrics_to_run = self._filter_metrics(action_metrics, proba_metrics)
         
-        # Process action-based metrics (need new_actions)
-        for metric_name, metric_func in self.action_metrics.items():
-            # Compute metrics for all bootstrap samples at once
-            bootstrap_values = self._compute_metric_vectorized(
-                metric_func, new_actions, bootstrap_weights_matrix
-            )
-            
-            # Calculate statistics (compatible format with original)
-            bootstrap_results[metric_name] = {
-                'mean': float(np.mean(bootstrap_values)),
-                'p025': float(np.percentile(bootstrap_values, 2.5)),
-                'p975': float(np.percentile(bootstrap_values, 97.5)),
-                'n_bootstrap': len(bootstrap_values),
-            }
-        
-        # Process probability-based metrics (need new_actions_proba)
-        for metric_name, metric_func in self.proba_metrics.items():
-            # Compute metrics for all bootstrap samples at once
-            bootstrap_values = self._compute_metric_vectorized(
-                metric_func, new_actions_proba, bootstrap_weights_matrix
-            )
-            
-            # Calculate statistics (compatible format with original)
-            bootstrap_results[metric_name] = {
-                'mean': float(np.mean(bootstrap_values)),
-                'p025': float(np.percentile(bootstrap_values, 2.5)),
-                'p975': float(np.percentile(bootstrap_values, 97.5)),
-                'n_bootstrap': len(bootstrap_values),
-            }
-        
-        return bootstrap_results
+        return self._process_bootstrap_results_vectorized(
+            new_actions, new_actions_proba, bootstrap_weights_matrix,
+            action_metrics_to_run, proba_metrics_to_run
+        )
     
     def _compute_metric_vectorized(self, metric_func, actions_or_proba: np.ndarray, 
                                  bootstrap_weights_matrix: np.ndarray) -> np.ndarray:
@@ -272,7 +320,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
             bootstrap_weights = bootstrap_weights_matrix[:, i]
             
             # Skip if all weights are zero
-            if np.sum(bootstrap_weights) == 0:
+            if not self._has_positive_weights(bootstrap_weights):
                 continue
                 
             # Calculate metric for this bootstrap sample
@@ -281,22 +329,11 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         
         return np.array(bootstrap_values)
     
-    def _estimate_ope_metrics_loop_based(self, new_actions: np.ndarray, new_actions_proba: np.ndarray) -> Dict[str, any]:
-        """
-        Original loop-based off-policy evaluation metrics estimation using Poisson bootstrap.
-        
-        Performance characteristics:
-        - Best for: n_observed < 1,000 or memory-constrained environments
-        - Memory usage: Low, constant memory footprint
-        - Slower for large problems where vectorized method could provide 1.2-1.7x speedup
-        
-        Args:
-            new_actions: Array of new policy actions (0=allow, 1=block)
-            new_actions_proba: Array of new policy action probabilities/scores
-            
-        Returns:
-            Dictionary with estimated metrics and confidence intervals
-        """
+    # ===== HELPER METHODS FOR REDUCING REDUNDANCY =====
+    
+    def _validate_and_convert_inputs(self, new_actions: np.ndarray, 
+                                   new_actions_proba: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Validate and convert inputs to numpy arrays with proper dimensions."""
         # Convert to numpy arrays if they're not already
         if not isinstance(new_actions, np.ndarray):
             new_actions = np.array(new_actions)
@@ -315,7 +352,68 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
                 f"number of observed transactions ({self.n_observed})"
             )
         
-        # Performance warnings for suboptimal usage
+        return new_actions, new_actions_proba
+    
+    def _filter_metrics(self, action_metrics: List[str] = None, 
+                       proba_metrics: List[str] = None) -> tuple[Dict, Dict]:
+        """Filter metrics based on selection parameters."""
+        if action_metrics is None and proba_metrics is None:
+            # Default: run all metrics
+            action_metrics_to_run = self.action_metrics
+            proba_metrics_to_run = self.proba_metrics
+        else:
+            # Selective: run only what's requested
+            action_metrics_to_run = ({k: v for k, v in self.action_metrics.items() if k in action_metrics} 
+                                    if action_metrics is not None else {})
+            proba_metrics_to_run = ({k: v for k, v in self.proba_metrics.items() if k in proba_metrics}
+                                   if proba_metrics is not None else {})
+        
+        return action_metrics_to_run, proba_metrics_to_run
+    
+    def _warn_vectorized_performance(self):
+        """Issue performance and memory warnings for vectorized method."""
+        memory_elements = self.n_observed * self.config.n_bootstrap
+        estimated_memory_mb = memory_elements * 8 / (1024 * 1024)  # 8 bytes per float64
+        estimated_memory_gb = estimated_memory_mb / 1024  # Convert to GB
+        
+        if self.n_observed < 1000:
+            warnings.warn(
+                f"Using vectorized method with small dataset (n_observed={self.n_observed}). "
+                f"The loop-based method estimate_ope_metrics() may be more efficient for small datasets. "
+                f"Consider using the standard method for n_observed < 1,000.",
+                UserWarning,
+                stacklevel=3
+            )
+        
+        if estimated_memory_gb > 8.0:  # Warn if estimated memory > 8GB (approaching 10GB limit)
+            warnings.warn(
+                f"Vectorized method will allocate ~{estimated_memory_gb:.2f}GB of memory "
+                f"({self.n_observed:,} observations × {self.config.n_bootstrap:,} bootstrap samples). "
+                f"This approaches the 10GB memory limit. Consider reducing n_bootstrap or using "
+                f"the loop-based method estimate_ope_metrics() if memory is constrained.",
+                UserWarning,
+                stacklevel=3
+            )
+        elif estimated_memory_gb > 5.0:  # Info warning for moderate memory usage
+            warnings.warn(
+                f"Vectorized method will allocate ~{estimated_memory_gb:.2f}GB of memory "
+                f"({self.n_observed:,} observations × {self.config.n_bootstrap:,} bootstrap samples). "
+                f"Monitor memory usage if running on constrained systems.",
+                UserWarning,
+                stacklevel=3
+            )
+        
+        if memory_elements > 1_250_000_000:  # ~10GB threshold (1.25B elements * 8 bytes = 10GB)
+            warnings.warn(
+                f"Very large matrix operation requested ({memory_elements:,} elements, "
+                f"~{estimated_memory_gb:.2f}GB). This may cause memory issues or system instability. "
+                f"Consider using the loop-based method estimate_ope_metrics() or reducing the problem size.",
+                UserWarning,
+                stacklevel=3
+            )
+    
+    def _warn_loop_based_performance(self):
+        """Issue performance warnings for loop-based method when vectorized might be better."""
         if self.n_observed > 1000 and self.config.n_bootstrap > 100:
             estimated_memory_mb = self.n_observed * self.config.n_bootstrap * 8 / (1024 * 1024)
             estimated_memory_gb = estimated_memory_mb / 1024
@@ -335,7 +433,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
                     f"with {memory_str} memory usage. Consider using the vectorized method "
                     f"for better performance if memory allows.",
                     UserWarning,
-                    stacklevel=2
+                    stacklevel=3
                 )
             else:
                 warnings.warn(
@@ -345,14 +443,38 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
                     f"(approaching 10GB limit). Consider using estimate_ope_metrics_vectorized() only "
                     f"if sufficient memory is available, or reduce n_bootstrap for better performance.",
                     UserWarning,
-                    stacklevel=2
+                    stacklevel=3
                 )
-        
-        # Poisson bootstrap estimation (faster than regular bootstrap)
+    
+    def _process_bootstrap_results_vectorized(self, new_actions: np.ndarray, new_actions_proba: np.ndarray,
+                                            bootstrap_weights_matrix: np.ndarray,
+                                            action_metrics_to_run: Dict, proba_metrics_to_run: Dict) -> Dict[str, any]:
+        """Process bootstrap results for vectorized method."""
         bootstrap_results = {}
         
         # Process action-based metrics (need new_actions)
-        for metric_name, metric_func in self.action_metrics.items():
+        for metric_name, metric_func in action_metrics_to_run.items():
+            bootstrap_values = self._compute_metric_vectorized(
+                metric_func, new_actions, bootstrap_weights_matrix
+            )
+            bootstrap_results[metric_name] = self._calculate_bootstrap_statistics(bootstrap_values)
+        
+        # Process probability-based metrics (need new_actions_proba)
+        for metric_name, metric_func in proba_metrics_to_run.items():
+            bootstrap_values = self._compute_metric_vectorized(
+                metric_func, new_actions_proba, bootstrap_weights_matrix
+            )
+            bootstrap_results[metric_name] = self._calculate_bootstrap_statistics(bootstrap_values)
+        
+        return bootstrap_results
+    
+    def _process_bootstrap_results_loop_based(self, new_actions: np.ndarray, new_actions_proba: np.ndarray,
+                                            action_metrics_to_run: Dict, proba_metrics_to_run: Dict) -> Dict[str, any]:
+        """Process bootstrap results for loop-based method."""
+        bootstrap_results = {}
+        
+        # Process action-based metrics (need new_actions)
+        for metric_name, metric_func in action_metrics_to_run.items():
             bootstrap_values = []
             
             for _ in range(self.config.n_bootstrap):
@@ -370,17 +492,10 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
                 bootstrap_value = metric_func(new_actions, bootstrap_weights)
                 bootstrap_values.append(bootstrap_value)
             
-            # Calculate statistics (compatible format with original)
-            bootstrap_values = np.array(bootstrap_values)
-            bootstrap_results[metric_name] = {
-                'mean': float(np.mean(bootstrap_values)),
-                'p025': float(np.percentile(bootstrap_values, 2.5)),
-                'p975': float(np.percentile(bootstrap_values, 97.5)),
-                'n_bootstrap': len(bootstrap_values),
-            }
+            bootstrap_results[metric_name] = self._calculate_bootstrap_statistics(np.array(bootstrap_values))
         
         # Process probability-based metrics (need new_actions_proba)
-        for metric_name, metric_func in self.proba_metrics.items():
+        for metric_name, metric_func in proba_metrics_to_run.items():
             bootstrap_values = []
             
             for _ in range(self.config.n_bootstrap):
@@ -398,30 +513,64 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
                 bootstrap_value = metric_func(new_actions_proba, bootstrap_weights)
                 bootstrap_values.append(bootstrap_value)
             
-            # Calculate statistics (compatible format with original)
-            bootstrap_values = np.array(bootstrap_values)
-            bootstrap_results[metric_name] = {
-                'mean': float(np.mean(bootstrap_values)),
-                'p025': float(np.percentile(bootstrap_values, 2.5)),
-                'p975': float(np.percentile(bootstrap_values, 97.5)),
-                'n_bootstrap': len(bootstrap_values),
-            }
+            bootstrap_results[metric_name] = self._calculate_bootstrap_statistics(np.array(bootstrap_values))
         
         return bootstrap_results
     
-    def get_config(self) -> CounterfactualEstimatorConfig:
-        """Get the current configuration."""
-        return self.config
+    def _calculate_bootstrap_statistics(self, bootstrap_values: np.ndarray) -> Dict[str, float]:
+        """Calculate bootstrap statistics in a consistent format."""
+        return {
+            'mean': float(np.mean(bootstrap_values)),
+            'p025': float(np.percentile(bootstrap_values, 2.5)),
+            'p975': float(np.percentile(bootstrap_values, 97.5)),
+            'n_bootstrap': len(bootstrap_values),
+        }
     
-    def _validate_data(self, data: pd.DataFrame, required_columns: List[str]) -> None:
-        """Validate that data contains required columns."""
-        missing_columns = set(required_columns) - set(data.columns)
-        if missing_columns:
-            raise ValueError(f"Data is missing required columns: {missing_columns}")
+    def _has_positive_weights(self, weights: np.ndarray) -> bool:
+        """Check if weights array has any positive values."""
+        return np.sum(weights) > 0
+    
+    # ===== END HELPER METHODS =====
+    
+    def _estimate_ope_metrics_loop_based(self, new_actions: np.ndarray, new_actions_proba: np.ndarray,
+                                       action_metrics: List[str] = None, 
+                                       proba_metrics: List[str] = None) -> Dict[str, any]:
+        """
+        Original loop-based off-policy evaluation metrics estimation using Poisson bootstrap.
+        
+        Performance characteristics:
+        - Best for: n_observed < 1,000 or memory-constrained environments
+        - Memory usage: Low, constant memory footprint
+        - Slower for large problems where vectorized method could provide 1.2-1.7x speedup
+        
+        Args:
+            new_actions: Array of new policy actions (0=allow, 1=block)
+            new_actions_proba: Array of new policy action probabilities/scores
+            action_metrics: List of action-based metrics to calculate (None = all)
+            proba_metrics: List of probability-based metrics to calculate (None = all)
+            
+        Returns:
+            Dictionary with estimated metrics and confidence intervals
+        """
+        # Validate inputs and convert to numpy arrays
+        new_actions, new_actions_proba = self._validate_and_convert_inputs(new_actions, new_actions_proba)
+        
+        # Check performance and suggest alternatives if appropriate
+        self._warn_loop_based_performance()
+        
+        # Filter metrics based on selection
+        action_metrics_to_run, proba_metrics_to_run = self._filter_metrics(action_metrics, proba_metrics)
+        
+        # Process bootstrap results
+        return self._process_bootstrap_results_loop_based(
+            new_actions, new_actions_proba, action_metrics_to_run, proba_metrics_to_run
+        )
+    
+    # ===== METRIC CALCULATION METHODS =====
     
     def _weighted_precision(self, new_actions: np.ndarray, weights: np.ndarray) -> float:
         """
-        Calculate weighted precision using Poisson bootstrap weights.
+        Calculate weighted precision using sklearn's precision_score with sample weights.
         
         Precision = True Positives / (True Positives + False Positives)
         where True Positive = correctly blocked fraud, False Positive = incorrectly blocked legitimate
@@ -430,29 +579,26 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
             new_actions: Array of new policy actions (0=allow, 1=block)
             weights: Bootstrap weights (importance_weights * poisson_weights)
         """
-        # Transactions that would be blocked by the new policy (action = 1)
-        blocked_mask = (new_actions == 1)
-        
-        if not blocked_mask.any():
-            return 0.0  # No blocked transactions, no precision calculation possible
-        
-        # Among blocked transactions, how many are actually fraud? (True Positives)
-        blocked_is_fraud = self.is_fraud_array[blocked_mask]
-        blocked_weights = weights[blocked_mask]
-        
-        if np.sum(blocked_weights) == 0:
+        # Check if we have any positive weights
+        if not self._has_positive_weights(weights):
             return 0.0
         
-        # True positives: blocked transactions that are actually fraud
-        true_positives = np.sum(blocked_is_fraud * blocked_weights)
-        # Total blocked (predicted positives)
-        total_blocked = np.sum(blocked_weights)
+        # Check if we have any blocked transactions (predicted positives)
+        if not (new_actions == 1).any():
+            return 0.0  # No blocked transactions, no precision calculation possible
         
-        return true_positives / total_blocked
+        # Use sklearn's precision_score with sample weights
+        precision = precision_score(
+            y_true=self.is_fraud_array,
+            y_pred=new_actions,
+            sample_weight=weights,
+            zero_division=0.0
+        )
+        return precision
     
     def _weighted_recall(self, new_actions: np.ndarray, weights: np.ndarray) -> float:
         """
-        Calculate weighted recall using Poisson bootstrap weights.
+        Calculate weighted recall using sklearn's recall_score with sample weights.
         
         Recall = True Positives / (True Positives + False Negatives)
         where True Positive = correctly blocked fraud, False Negative = incorrectly allowed fraud
@@ -461,42 +607,43 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
             new_actions: Array of new policy actions (0=allow, 1=block)
             weights: Bootstrap weights (importance_weights * poisson_weights)
         """
-        # All actual fraud cases
-        fraud_mask = (self.is_fraud_array == 1)
-        
-        if not fraud_mask.any():
-            return 1.0  # No fraud cases, perfect recall by definition
-        
-        # Among fraud cases, how many would be blocked by the new policy? (True Positives)
-        fraud_actions = new_actions[fraud_mask]
-        fraud_weights = weights[fraud_mask]
-        
-        if np.sum(fraud_weights) == 0:
+        # Check if we have any positive weights
+        if not self._has_positive_weights(weights):
             return 0.0
         
-        # Fraud cases that would be blocked (action = 1) - True Positives
-        blocked_fraud_mask = (fraud_actions == 1)
-        true_positives = np.sum(fraud_weights[blocked_fraud_mask])
-        # Total fraud cases (actual positives)
-        total_fraud = np.sum(fraud_weights)
+        # Check if we have any fraud cases
+        if not self.is_fraud_array.any():
+            return 1.0  # No fraud cases, perfect recall by definition
         
-        return true_positives / total_fraud
+        # Use sklearn's recall_score with sample weights
+        recall = recall_score(
+            y_true=self.is_fraud_array,
+            y_pred=new_actions,
+            sample_weight=weights,
+            zero_division=0.0
+        )
+        return recall
     
     def _weighted_f1(self, new_actions: np.ndarray, weights: np.ndarray) -> float:
         """
-        Calculate weighted F1-score using Poisson bootstrap weights.
+        Calculate weighted F1-score using sklearn's f1_score with sample weights.
         
         Args:
             new_actions: Array of new policy actions (0=allow, 1=block)
             weights: Bootstrap weights (importance_weights * poisson_weights)
         """
-        precision = self._weighted_precision(new_actions, weights)
-        recall = self._weighted_recall(new_actions, weights)
-        
-        if precision + recall == 0:
+        # Check if we have any positive weights
+        if not self._has_positive_weights(weights):
             return 0.0
         
-        return 2 * (precision * recall) / (precision + recall)
+        # Use sklearn's f1_score with sample weights
+        f1 = f1_score(
+            y_true=self.is_fraud_array,
+            y_pred=new_actions,
+            sample_weight=weights,
+            zero_division=0.0
+        )
+        return f1
     
     def _weighted_fraud_rate(self, new_actions: np.ndarray, weights: np.ndarray) -> float:
         """
@@ -518,7 +665,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
         allowed_is_fraud = self.is_fraud_array[allowed_mask]
         allowed_weights = weights[allowed_mask]
         
-        if np.sum(allowed_weights) == 0:
+        if not self._has_positive_weights(allowed_weights):
             return 0.0
         
         weighted_fraud = np.sum(allowed_is_fraud * allowed_weights)
@@ -542,7 +689,7 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
             Average precision score
         """
         # Check if we have any positive weights
-        if np.sum(weights) == 0:
+        if not self._has_positive_weights(weights):
             return 0.0
         
         # Check if we have any fraud cases
@@ -556,4 +703,72 @@ class CounterfactualEstimator(CounterfactualEstimatorProtocol):
             y_score=new_actions_proba,
             sample_weight=weights
         )
-        return ap_score 
+        return ap_score
+    
+    def _weighted_roc_auc(self, new_actions_proba: np.ndarray, weights: np.ndarray) -> float:
+        """
+        Calculate weighted ROC AUC using sklearn's roc_auc_score.
+        
+        ROC AUC measures the ability of the classifier to distinguish between classes.
+        It represents the area under the ROC curve, which plots true positive rate
+        vs false positive rate at various threshold settings.
+        
+        Args:
+            new_actions_proba: Array of new policy action probabilities/scores for ROC AUC calculation
+            weights: Bootstrap weights (importance_weights * poisson_weights)
+            
+        Returns:
+            ROC AUC score
+        """
+        # Check if we have any positive weights
+        if not self._has_positive_weights(weights):
+            return 0.5  # Random classifier performance
+        
+        # Check if we have any fraud cases and non-fraud cases
+        if not self.is_fraud_array.any():
+            return 0.5  # No fraud cases, random performance
+        if self.is_fraud_array.all():
+            return 0.5  # All fraud cases, random performance
+        
+        # Calculate ROC AUC using model scores and true fraud labels
+        roc_auc = roc_auc_score(
+            y_true=self.is_fraud_array,
+            y_score=new_actions_proba,
+            sample_weight=weights
+        )
+        return roc_auc
+    
+    def _weighted_brier_score(self, new_actions_proba: np.ndarray, weights: np.ndarray) -> float:
+        """
+        Calculate weighted Brier score using sklearn's brier_score_loss.
+        
+        Brier score measures the accuracy of probabilistic predictions. It is calculated
+        as the mean squared difference between predicted probabilities and actual outcomes.
+        Lower scores are better (0 = perfect, 1 = worst).
+        
+        Args:
+            new_actions_proba: Array of new policy action probabilities/scores for Brier score calculation
+            weights: Bootstrap weights (importance_weights * poisson_weights)
+            
+        Returns:
+            Brier score (lower is better)
+        """
+        # Check if we have any positive weights
+        if not self._has_positive_weights(weights):
+            return 0.25  # Expected Brier score for random classifier on balanced data
+        
+        # Check if we have any fraud cases
+        if not self.is_fraud_array.any():
+            # All legitimate - perfect predictions would be all 0s
+            return np.average(new_actions_proba ** 2, weights=weights)
+        if self.is_fraud_array.all():
+            # All fraud - perfect predictions would be all 1s
+            return np.average((1 - new_actions_proba) ** 2, weights=weights)
+        
+        # Calculate Brier score using model probabilities and true fraud labels
+        brier = brier_score_loss(
+            y_true=self.is_fraud_array,
+            y_proba=new_actions_proba,
+            sample_weight=weights
+        )
+        return brier 
