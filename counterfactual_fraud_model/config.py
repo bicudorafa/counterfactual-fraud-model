@@ -29,6 +29,7 @@ class RetrainingStrategy(str, Enum):
     
     FILTERING = "filtering"
     WEIGHTING = "weighting"
+    FRAUD_INJECTION = "fraud_injection"
 
 
 class DataGeneratorConfig(BaseModel):

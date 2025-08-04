@@ -155,9 +155,125 @@ class WeightingDataPreprocessor(RetrainingDataPreprocessorProtocol):
         return self._last_preprocessing_info.copy()
 
 
+class FraudInjectionDataPreprocessor(RetrainingDataPreprocessorProtocol):
+    """Data preprocessor that combines allowed transactions with fraud-injected blocked transactions."""
+    
+    def __init__(self, strategy_params: Dict[str, Any] = None, fraud_prior: float = 0.14):
+        """
+        Initialize the fraud injection preprocessor.
+        
+        Args:
+            strategy_params: Additional parameters for the strategy
+            fraud_prior: Expected fraud rate for sampling from blocked transactions (default: 0.14)
+        """
+        self.strategy_params = strategy_params or {}
+        self.fraud_prior = fraud_prior
+        self._last_preprocessing_info = None
+    
+    def prepare_training_data(
+        self, 
+        policy_data: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.Series, Optional[np.ndarray]]:
+        """
+        Combine allowed transactions with fraud-injected samples from blocked transactions.
+        
+        Args:
+            policy_data: Full policy data with features, actions, and propensity scores
+            
+        Returns:
+            Tuple of (features_df, target_series, None) - no sample weights for injection strategy
+        """
+        # Create allowed data (same as FilteringDataPreprocessor)
+        allowed_data = policy_data[policy_data['model_action'] == 'allow'].copy()
+        
+        if len(allowed_data) == 0:
+            raise ValueError("No transactions with model_action == 'allow' found. Cannot retrain model.")
+        
+        # Create blocked data for fraud injection
+        blocked_data = policy_data[policy_data['model_action'] == 'block'].copy()
+        
+        if len(blocked_data) == 0:
+            raise ValueError("No transactions with model_action == 'block' found. Cannot perform fraud injection.")
+        
+        # Check for required columns
+        if 'model_scores' not in blocked_data.columns:
+            raise ValueError("model_scores column required for fraud injection strategy")
+        
+        # Calculate number of samples to inject based on fraud_prior
+        num_samples_to_inject = max(1, int(len(blocked_data) * self.fraud_prior))
+        
+        # Ensure we don't try to sample more than available
+        num_samples_to_inject = min(num_samples_to_inject, len(blocked_data))
+        
+        # Normalize model_scores to use as sampling probabilities
+        model_scores = blocked_data['model_scores'].values
+        if np.all(model_scores == model_scores[0]):  # All scores are the same
+            # Use uniform probabilities if all scores are identical
+            sampling_probs = np.ones(len(blocked_data)) / len(blocked_data)
+        else:
+            # Normalize scores to probabilities
+            sampling_probs = model_scores / model_scores.sum()
+        
+        # Sample from blocked data using model_scores as probabilities
+        sampled_indices = np.random.choice(
+            blocked_data.index,
+            size=num_samples_to_inject,
+            replace=False,
+            p=sampling_probs
+        )
+        
+        # Create modified blocked data with fraud labels
+        modified_blocked_data = blocked_data.copy()
+        # Set is_fraud=1 for sampled transactions (fraudulent)
+        modified_blocked_data.loc[sampled_indices, 'is_fraud'] = 1
+        # Set is_fraud=0 for not sampled transactions (non-fraudulent)
+        not_sampled_indices = blocked_data.index.difference(sampled_indices)
+        modified_blocked_data.loc[not_sampled_indices, 'is_fraud'] = 0
+        
+        # Combine allowed data with all modified blocked data
+        combined_data = pd.concat([allowed_data, modified_blocked_data], ignore_index=True)
+        
+        # Extract feature columns
+        feature_columns = [col for col in combined_data.columns 
+                          if col.startswith('feature_') or col.startswith('x')]
+        if len(feature_columns) == 0:
+            raise ValueError("No feature columns found in data. Expected columns starting with 'feature_' or 'x'")
+        
+        X = combined_data[feature_columns]
+        y = combined_data['is_fraud']
+        
+        # Store info for logging
+        self._last_preprocessing_info = {
+            'strategy': 'fraud_injection',
+            'original_samples': len(policy_data),
+            'allowed_samples': len(allowed_data),
+            'blocked_samples': len(blocked_data),
+            'injected_fraud_samples': len(sampled_indices),
+            'injected_non_fraud_samples': len(not_sampled_indices),
+            'final_samples': len(combined_data),
+            'fraud_prior': self.fraud_prior,
+            'injection_ratio': len(sampled_indices) / len(blocked_data),
+            'feature_count': len(feature_columns),
+            'final_fraud_rate': y.mean(),
+            'allowed_fraud_rate': allowed_data['is_fraud'].mean(),
+            'blocked_fraud_rate': modified_blocked_data['is_fraud'].mean(),
+            'strategy_params': self.strategy_params
+        }
+        
+        return X, y, None  # No sample weights for injection strategy
+    
+    def get_strategy_info(self) -> Dict[str, Any]:
+        """Get information about the last preprocessing operation."""
+        if self._last_preprocessing_info is None:
+            raise ValueError("No preprocessing has been performed yet")
+        return self._last_preprocessing_info.copy()
+
+
 def create_preprocessor(
     strategy: RetrainingStrategy,
-    strategy_params: Dict[str, Any] = None
+    strategy_params: Dict[str, Any] = None,
+    # TODO: think of a better way to handle this
+    fraud_prior: float = 0.14
 ) -> RetrainingDataPreprocessorProtocol:
     """
     Factory function to create appropriate preprocessor based on strategy.
@@ -165,6 +281,7 @@ def create_preprocessor(
     Args:
         strategy: The retraining strategy to use
         strategy_params: Additional parameters for the strategy
+        fraud_prior: Fraud prior for fraud injection strategy (default: 0.14)
         
     Returns:
         Configured preprocessor instance
@@ -173,5 +290,7 @@ def create_preprocessor(
         return FilteringDataPreprocessor(strategy_params)
     elif strategy == RetrainingStrategy.WEIGHTING:
         return WeightingDataPreprocessor(strategy_params)
+    elif strategy == RetrainingStrategy.FRAUD_INJECTION:
+        return FraudInjectionDataPreprocessor(strategy_params, fraud_prior)
     else:
         raise ValueError(f"Unsupported retraining strategy: {strategy}") 

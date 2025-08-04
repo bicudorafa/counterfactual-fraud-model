@@ -179,11 +179,28 @@ class RetrainingSimulationAnalyzer:
         metrics = self.df['metric'].unique()
         n_metrics = len(metrics)
         
-        # Create subplots
-        fig, axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
-        axes = axes.flatten()
+        # Create dynamic subplot layout
+        if n_metrics <= 2:
+            nrows, ncols = 1, n_metrics
+        elif n_metrics <= 4:
+            nrows, ncols = 2, 2
+        elif n_metrics <= 6:
+            nrows, ncols = 2, 3
+        else:
+            nrows, ncols = 3, (n_metrics + 2) // 3  # Round up division
         
-        colors = {'filtering': '#2E86C1', 'weighting': '#E74C3C'}
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, constrained_layout=True)
+        
+        # Handle single subplot case
+        if n_metrics == 1:
+            axes = [axes]
+        else:
+            axes = axes.flatten()
+        
+        # Generate colors dynamically based on available strategies
+        strategies = sorted(self.df['strategy'].unique())
+        color_palette = plt.cm.Set1(np.linspace(0, 1, len(strategies)))
+        colors = {strategy: color_palette[i] for i, strategy in enumerate(strategies)}
         
         for i, metric in enumerate(metrics):
             ax = axes[i]
@@ -191,12 +208,15 @@ class RetrainingSimulationAnalyzer:
             
             # Prepare data for dot chart
             exploration_rates = sorted(metric_data['exploration_rate'].unique())
-            strategies = sorted(metric_data['strategy'].unique())
+            metric_strategies = sorted(metric_data['strategy'].unique())
             
             x_offset = 0.001  # Small offset for different strategies on x-axis
             
             for j, strategy in enumerate(strategies):
-                strategy_data = metric_data[metric_data['strategy'] == strategy].sort_values('exploration_rate')
+                strategy_data = metric_data[metric_data['strategy'] == strategy]
+                if len(strategy_data) == 0:
+                    continue
+                strategy_data = strategy_data.sort_values('exploration_rate')
                 
                 # Use exploration rates as x positions (with small offset for strategies)
                 x_positions = strategy_data['exploration_rate'].values + j * x_offset
@@ -226,11 +246,20 @@ class RetrainingSimulationAnalyzer:
             ax.legend()
             ax.grid(True, alpha=0.3)
         
-        # Remove empty subplot if odd number of metrics
-        if n_metrics < len(axes):
-            fig.delaxes(axes[-1])
+        # Remove empty subplots if we have extras
+        total_subplots = nrows * ncols
+        if n_metrics < total_subplots:
+            for idx in range(n_metrics, total_subplots):
+                fig.delaxes(axes[idx])
             
-        fig.suptitle('OPE Metrics Comparison: Filtering vs Weighting Strategies (Dot Chart)', 
+        # Create dynamic title based on available strategies
+        strategy_names = [strategy.replace('_', ' ').title() for strategy in strategies]
+        if len(strategy_names) <= 3:
+            strategy_str = ' vs '.join(strategy_names)
+        else:
+            strategy_str = f"{len(strategy_names)} Retraining Strategies"
+        
+        fig.suptitle(f'OPE Metrics Comparison: {strategy_str} (Dot Chart)', 
                      fontsize=16, fontweight='bold')
         
         return fig
@@ -259,25 +288,30 @@ class RetrainingSimulationAnalyzer:
         print("RETRAINING SIMULATION ANALYSIS - KEY INSIGHTS")
         print("=" * 60)
         
+        # Get available strategies dynamically
+        available_strategies = sorted(self.df['strategy'].unique())
+        
         # Overall performance comparison
         mean_performance = self.df.groupby(['strategy', 'metric'])['mean'].mean()
         
         print("\n1. AVERAGE PERFORMANCE ACROSS ALL EXPLORATION RATES:")
-        for strategy in ['filtering', 'weighting']:
-            print(f"\n{strategy.upper()} Strategy:")
+        for strategy in available_strategies:
+            print(f"\n{strategy.upper().replace('_', ' ')} Strategy:")
             for metric in self.df['metric'].unique():
-                value = mean_performance[strategy, metric]
-                print(f"  • {metric.replace('_', ' ').title()}: {value:.4f}")
+                if (strategy, metric) in mean_performance.index:
+                    value = mean_performance[strategy, metric]
+                    print(f"  • {metric.replace('_', ' ').title()}: {value:.4f}")
         
         # Confidence interval width analysis
         print("\n2. UNCERTAINTY ANALYSIS (Average CI Width):")
         ci_analysis = self.df.groupby(['strategy', 'metric'])['ci_width'].mean()
         
-        for strategy in ['filtering', 'weighting']:
-            print(f"\n{strategy.upper()} Strategy:")
+        for strategy in available_strategies:
+            print(f"\n{strategy.upper().replace('_', ' ')} Strategy:")
             for metric in self.df['metric'].unique():
-                value = ci_analysis[strategy, metric]
-                print(f"  • {metric.replace('_', ' ').title()}: {value:.4f}")
+                if (strategy, metric) in ci_analysis.index:
+                    value = ci_analysis[strategy, metric]
+                    print(f"  • {metric.replace('_', ' ').title()}: {value:.4f}")
         
         # Exploration rate impact
         print("\n3. EXPLORATION RATE IMPACT:")
@@ -285,11 +319,13 @@ class RetrainingSimulationAnalyzer:
             print(f"\n{metric.replace('_', ' ').title()}:")
             metric_data = self.df[self.df['metric'] == metric]
             
-            for strategy in ['filtering', 'weighting']:
-                strategy_data = metric_data[metric_data['strategy'] == strategy].sort_values('exploration_rate')
-                trend = "increasing" if strategy_data['mean'].iloc[-1] > strategy_data['mean'].iloc[0] else "decreasing"
-                change = abs(strategy_data['mean'].iloc[-1] - strategy_data['mean'].iloc[0])
-                print(f"  • {strategy.title()}: {trend} trend (Δ{change:.4f})")
+            for strategy in available_strategies:
+                strategy_data = metric_data[metric_data['strategy'] == strategy]
+                if len(strategy_data) > 0:
+                    strategy_data = strategy_data.sort_values('exploration_rate')
+                    trend = "increasing" if strategy_data['mean'].iloc[-1] > strategy_data['mean'].iloc[0] else "decreasing"
+                    change = abs(strategy_data['mean'].iloc[-1] - strategy_data['mean'].iloc[0])
+                    print(f"  • {strategy.replace('_', ' ').title()}: {trend} trend (Δ{change:.4f})")
 
 
 def run_analysis():
@@ -300,7 +336,7 @@ def run_analysis():
     
     # Define simulation parameters
     exploration_rates = np.linspace(0.01, 0.1, 5)
-    strategies = [RetrainingStrategy.FILTERING, RetrainingStrategy.WEIGHTING]
+    strategies = [RetrainingStrategy.FILTERING, RetrainingStrategy.WEIGHTING, RetrainingStrategy.FRAUD_INJECTION]
     
     print(f"Running simulations with:")
     print(f"  • Exploration rates: {exploration_rates}")
