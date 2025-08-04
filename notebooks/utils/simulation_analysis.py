@@ -12,6 +12,11 @@ import matplotlib.pyplot as plt
 from typing import Dict, List, Any
 from sklearn.metrics import precision_recall_curve, auc
 from sklearn.calibration import calibration_curve
+import sys
+import os
+
+# Add the project root to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 from counterfactual_fraud_model import (
     OffPolicyEvaluationPipeline,

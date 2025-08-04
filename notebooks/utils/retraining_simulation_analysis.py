@@ -4,6 +4,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import List, Dict, Any, Tuple
 from pathlib import Path
+import sys
+import os
+
+# Add the project root to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 from counterfactual_fraud_model.config import (
     SyntheticRetrainingConfig,

@@ -14,6 +14,11 @@ from typing import Dict, List, Any, Optional
 from sklearn.metrics import precision_recall_curve, auc
 from sklearn.calibration import calibration_curve
 
+# Add the project root to Python path
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+
 from counterfactual_fraud_model import (
     SyntheticOffPolicyEvaluationPipeline,
     SyntheticOffPolicyEvaluationConfig,
