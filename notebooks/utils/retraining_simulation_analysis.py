@@ -23,7 +23,6 @@ from counterfactual_fraud_model.config import (
     RetrainingStrategy
 )
 from counterfactual_fraud_model.pipelines import SyntheticRetrainingPipeline
-# TODO: entender se o pre_processing está afetando evaluation tambem, porque nas metricas normais está melhor, mas no OPE está estranho
 
 
 def run_retraining_simulations(
@@ -171,7 +170,7 @@ class RetrainingSimulationAnalyzer:
         
         return pd.DataFrame(processed_data)
     
-    def create_dot_chart(self, figsize: Tuple[int, int] = (15, 10)) -> plt.Figure:
+    def plot_dot_chart(self, figsize: Tuple[int, int] = (15, 10)) -> None:
         """
         Create dot charts with confidence intervals for each metric.
         
@@ -266,8 +265,9 @@ class RetrainingSimulationAnalyzer:
         
         fig.suptitle(f'OPE Metrics Comparison: {strategy_str} (Dot Chart)', 
                      fontsize=16, fontweight='bold')
+        plt.show()
         
-        return fig
+        return None
     
     def create_summary_table(self) -> pd.DataFrame:
         """
@@ -351,7 +351,7 @@ def run_analysis():
     results, reference_data = run_retraining_simulations(
         exploration_rates=exploration_rates,
         strategies=strategies,
-        sample_size=300_000,
+        sample_size=50_000,
         random_state=42
     )
     
@@ -362,20 +362,13 @@ def run_analysis():
     print("\nCreating visualizations...")
     
     # Dot chart with confidence intervals
-    fig_dot = analyzer.create_dot_chart()
-    fig_dot.savefig('retraining_simulation_dot_chart.png', dpi=300, bbox_inches='tight')
-    print("✓ Dot chart with confidence intervals saved as 'retraining_simulation_dot_chart.png'")
+    fig_dot = analyzer.plot_dot_chart()
     
     # Generate summary table
     summary_table = analyzer.create_summary_table()
-    summary_table.to_csv('retraining_simulation_summary.csv')
-    print("✓ Summary table saved as 'retraining_simulation_summary.csv'")
     
     # Print insights
     analyzer.print_insights()
-    
-    # Display plots
-    plt.show()
     
     return analyzer, results, reference_data
 
