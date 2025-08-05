@@ -180,7 +180,7 @@ class CounterfactualValuesEstimator:
         Estimate metrics for the original model policy (model_action).
         
         Evaluates how well the original model policy would perform by converting
-        model_action to binary predictions (allow=1, block=0).
+        model_action to binary predictions (block=1, allow=0).
         
         Returns:
             Dictionary with metrics and their statistics (mean, p025, p975, std, n_bootstrap)
@@ -188,7 +188,7 @@ class CounterfactualValuesEstimator:
         if 'model_action' not in self.observed_data.columns:
             raise ValueError("model_action column not found in data. Required for policy metrics evaluation.")
         
-        y_pred = (self.observed_data['model_action'] == 'allow').astype(int)
+        y_pred = (self.observed_data['model_action'] == 'block').astype(int)
         return self.estimate_ope_metrics(y_pred)
     
     def estimate_threshold_metrics(self, threshold: float) -> Dict[str, Dict[str, float]]:
